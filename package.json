@@ -1,0 +1,78 @@
+{
+  "name": "unreal-hub",
+  "productName": "Unreal Hub",
+  "version": "2.1.0",
+  "description": "Unreal Hub - a fast, beautiful launcher for your Unreal Engine projects. Developed by jsTici & Zorac.",
+  "main": "src/main.js",
+  "author": "jsTici & Zorac",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "dist": "electron-builder --win nsis",
+    "dist:all": "electron-builder -mwl"
+  },
+  "devDependencies": {
+    "electron": "^44.7.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "com.jstici.unrealhub",
+    "productName": "Unreal Hub",
+    "copyright": "Copyright © 2026 jsTici & Zorac",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "src/assets/icon.ico",
+      "requestedExecutionLevel": "asInvoker",
+      "legalTrademarks": "Unreal Hub by jsTici & Zorac",
+      "signtoolOptions": {
+        "publisherName": "jsTici & Zorac"
+      }
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "Unreal Hub",
+      "menuCategory": false,
+      "installerIcon": "src/assets/icon.ico",
+      "uninstallerIcon": "src/assets/icon.ico",
+      "installerHeaderIcon": "src/assets/icon.ico",
+      "installerSidebar": "build/installerSidebar.bmp",
+      "uninstallerSidebar": "build/installerSidebar.bmp",
+      "installerHeader": "build/installerHeader.bmp",
+      "license": "build/license.txt",
+      "multiLanguageInstaller": true,
+      "displayLanguageSelector": true,
+      "installerLanguages": [
+        "en_US",
+        "es_ES"
+      ],
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "UnrealHub-Setup-${version}.exe",
+      "uninstallDisplayName": "Unreal Hub ${version}",
+      "include": "build/installer.nsh"
+    },
+    "electronVersion": "33.2.1"
+  },
+  "homepage": "https://github.com/TicianoDev/unreal-hub"
+}
