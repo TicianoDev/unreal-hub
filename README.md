@@ -14,9 +14,9 @@ Find all your projects in seconds, open them with one click, keep your engines t
 
 <br/>
 
-[![Download](https://img.shields.io/badge/⬇_Download-Windows_Setup-2f62d6?style=for-the-badge)](https://github.com/jsTici/unreal-hub/releases/latest)
+[![Download](https://img.shields.io/badge/⬇_Download-Windows_Setup-2f62d6?style=for-the-badge)](https://github.com/TicianoDev/unreal-hub/releases/latest)
 &nbsp;
-[![Version](https://img.shields.io/badge/version-2.1.0-6a4fd6?style=for-the-badge)](https://github.com/jsTici/unreal-hub/releases)
+[![Version](https://img.shields.io/badge/version-2.1.0-6a4fd6?style=for-the-badge)](https://github.com/TicianoDev/unreal-hub/releases)
 &nbsp;
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e?style=for-the-badge)](LICENSE)
 
@@ -37,7 +37,7 @@ Find all your projects in seconds, open them with one click, keep your engines t
 <tr>
 <td width="50%" valign="top">
 
-### 🔍 Your whole library, automatically
+### Your whole library, automatically
 - Scans every drive + Unreal's own recent list
 - Real project thumbnails, engine version, C++ / Blueprint, Git branch
 - Favorites, pins, tags, notes, colors and custom names
@@ -129,7 +129,7 @@ Find all your projects in seconds, open them with one click, keep your engines t
 
 ## 📦 Install
 
-1. Download **`UnrealHub-Setup-2.1.0.exe`** from [**Releases**](https://github.com/jsTici/unreal-hub/releases/latest).
+1. Download **`UnrealHub-Setup-2.1.0.exe`** from [**Releases**](https://github.com/TicianoDev/unreal-hub/releases/latest).
 2. Run it, choose your language and the options you want (desktop shortcut, Start menu, start with Windows).
 3. Done — Unreal Hub scans your drives and shows all your projects.
 
