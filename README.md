@@ -195,7 +195,7 @@ build/
 
 Designed & programmed by **jsTici** and **Zorac**.
 
-Inspired by [UnrealLauncher](https://github.com/NeelFrostrain/UnrealLauncher) · Icons in the style of [Lucide](https://lucide.dev) (MIT)
+Icons in the style of [Lucide](https://lucide.dev) (MIT)
 
 *Unreal® and Unreal Engine® are trademarks of Epic Games, Inc. This project is not affiliated with or endorsed by Epic Games.*
 
