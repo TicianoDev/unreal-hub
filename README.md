@@ -31,7 +31,7 @@ Find all your projects in seconds, open them with one click, keep your engines t
 
 ---
 
-## ✨ Features
+## Features
 
 <table>
 <tr>
@@ -46,7 +46,7 @@ Find all your projects in seconds, open them with one click, keep your engines t
 </td>
 <td width="50%" valign="top">
 
-### 🚀 One click to work
+### One click to work
 - Open in editor, play standalone or launch with custom args
 - **Live editor tracking** — see what's running, stop it, time spent per project
 - Desktop shortcuts with the project's own picture as icon
@@ -57,7 +57,7 @@ Find all your projects in seconds, open them with one click, keep your engines t
 <tr>
 <td valign="top">
 
-### 🛠️ Project tools
+### Project tools
 - Generate project files, compile C++, package (BuildCookRun)
 - Fix up redirectors & compile all Blueprints
 - Zip backup, duplicate, switch engine version
@@ -66,7 +66,7 @@ Find all your projects in seconds, open them with one click, keep your engines t
 </td>
 <td valign="top">
 
-### 🎨 Made to feel good
+### Made to feel good
 - Soft-glass dashboard with clock, calendar & activity heatmap
 - Light / dark / system theme and 7 accent colors
 - **English** (default) and **Español**
@@ -77,14 +77,14 @@ Find all your projects in seconds, open them with one click, keep your engines t
 <tr>
 <td valign="top">
 
-### 🖼️ Gallery
+###  Gallery
 - Browse every screenshot saved by your project
 - Set any of them as the project cover in one click
 
 </td>
 <td valign="top">
 
-### 🔒 Trustworthy
+###  Trustworthy
 - Works 100% offline — no accounts, no telemetry
 - Per-user install, **no admin rights**
 - Clean uninstaller — your projects are never touched
@@ -140,7 +140,7 @@ Find all your projects in seconds, open them with one click, keep your engines t
 
 ---
 
-## 🧑‍💻 Build from source
+## Build from source
 
 ```bash
 git clone https://github.com/jsTici/unreal-hub.git
