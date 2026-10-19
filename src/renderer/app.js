@@ -8,7 +8,8 @@ const S = {
   cal: new Date(), ptab: 'overview', analysis: {}, details: {}, cleanSel: {},
   tasks: [], activeTask: null, running: [], sessions: [], gallery: {}, scan: { on: false, dir: '', found: 0 }, maximized: false,
   fab: { state: 'idle', data: null, tried: 0 },
-  plugins: {}, plgFilter: 'project', plgSearch: '', update: { state: 'idle' }
+  plugins: {}, plgFilter: 'project', plgSearch: '', update: { state: 'idle' },
+  fabLib: { data: null, loading: false }, fabType: 'all', fabUe: '', fabQ: '', fabSort: localStorage.getItem('fabSort') || 'name'
 };
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -162,7 +163,7 @@ function renderRail() {
   const nav = (v, i, extra = '') => `<button class="r lab ${cur === v ? 'on' : ''}" data-act="go" data-v="${v}" title="${t('nav.' + v + '.d')}">${icon(i, 20)}<span class="nl">${t('nav.' + v)}</span>${extra}</button>`;
   $('#rail').innerHTML = `
     <div class="logo" data-act="go" data-v="home" title="Unreal Hub" style="cursor:pointer">${hubLogo(28)}</div>
-    ${nav('home', 'home')}${nav('library', 'library')}${nav('engines', 'cpu')}${nav('tasks', 'terminal', running ? '<span class="dot spin"></span>' : '')}
+    ${nav('home', 'home')}${nav('library', 'library')}${nav('engines', 'cpu')}${nav('fab', 'cart')}${nav('tasks', 'terminal', running ? '<span class="dot spin"></span>' : '')}
     <div class="sp"></div>
     <button class="r" data-act="theme">${icon(isDark() ? 'sun' : 'moon', 19)}<span class="tip">${t('k.theme')}</span></button>
     <button class="r" data-act="lang" style="font-weight:700;font-size:12px">${LANG.toUpperCase()}<span class="tip">${t('set.language')}</span></button>
@@ -184,7 +185,7 @@ function renderTop() {
     <div class="winctl"><button data-act="win" data-w="min" title="${t('win.min')}">${icon('minimize', 12)}</button><button data-act="win" data-w="max" title="${t(S.maximized ? 'win.restore' : 'win.max')}">${icon(S.maximized ? 'restore' : 'maximize', 12)}</button><button data-act="win" data-w="close" class="x" title="${t(S.settings.closeToTray ? 'win.tray' : 'btn.close')}">${icon('close', 12)}</button></div>`;
 }
 function renderView() {
-  const fn = { home: viewHome, library: viewLibrary, project: viewProject, engines: viewEngines, tasks: viewTasks, settings: viewSettings }[S.view];
+  const fn = { home: viewHome, library: viewLibrary, project: viewProject, engines: viewEngines, fab: viewFabLib, tasks: viewTasks, settings: viewSettings }[S.view];
   $('#view').innerHTML = fn ? fn() : '';
   afterRender();
 }
@@ -582,6 +583,105 @@ function viewEngines() {
       : `<div class="empty"><div><div class="ill">${icon('cpu', 36)}</div><b>${t('eng.empty')}</b>${t('eng.emptySub')}<div class="acts"><button class="btn" data-act="epic">${t('eng.epic')}</button><button class="btn pri" data-act="engAdd">${t('eng.add')}</button></div></div></div>`}</div></section>`;
 }
 
+// Fab / Vault library: assets already downloaded on this PC.
+const FAB_ICON = { plugin: 'blueprint', content: 'box', project: 'folder' };
+const FAB_TYPES = [['all', 'layers'], ['plugin', 'blueprint'], ['content', 'box'], ['project', 'folder']];
+function loadFabLib(scan = false) {
+  if (S.fabLib.loading) return;
+  S.fabLib.loading = true;
+  if (S.view === 'fab') renderView();
+  (scan ? api.fabLibraryScan() : api.fabLibrary()).then((r) => fabLibDone(r));
+}
+function fabLibDone(r) {
+  S.fabLib.loading = false;
+  if (r && r.ok && r.data) S.fabLib.data = r.data; else if (r && !r.ok) showError(r.error);
+  if (S.view === 'fab') renderView();
+}
+function fabFiltered() {
+  const d = S.fabLib.data; if (!d) return [];
+  const q = S.fabQ.trim().toLowerCase();
+  const list = d.items.filter((x) => (S.fabType === 'all' || x.type === S.fabType)
+    && (!S.fabUe || x.ue.includes(S.fabUe))
+    && (!q || [x.name, x.description, x.author, x.category, ...x.paths].join(' ').toLowerCase().includes(q)));
+  const by = { name: (a, b) => a.name.localeCompare(b.name), modified: (a, b) => b.modified - a.modified, type: (a, b) => a.type.localeCompare(b.type) || a.name.localeCompare(b.name) };
+  return list.sort(by[S.fabSort] || by.name);
+}
+function fabThumb(x) {
+  if (x.thumb) return `<img class="${x.type === 'plugin' ? 'icon' : ''}" src="${esc(x.thumb)}" alt="" loading="lazy" decoding="async" draggable="false"/>`;
+  const h = hue(x.name);
+  return `<div class="ph" style="background:linear-gradient(135deg,hsl(${h} 42% 52%),hsl(${(h + 50) % 360} 48% 26%))">${icon(FAB_ICON[x.type] || 'box', 34)}</div>`;
+}
+function fabLibCard(x, i) {
+  const ue = x.ue.length ? x.ue.map((v) => `<span class="uev">${esc(v)}</span>`).join('') : `<span class="uev none">${t('fl.ueUnknown')}</span>`;
+  return `<button class="fabc lib" data-act="fabItem" data-id="${esc(x.id)}" title="${esc(x.name)}" style="animation-delay:${Math.min(i, 16) * 22}ms">
+    <div class="th">${fabThumb(x)}<span class="free type-${x.type}">${icon(FAB_ICON[x.type] || 'box', 12)} ${t('fl.t.' + x.type)}</span></div>
+    <div class="meta"><div class="nm">${esc(x.name)}</div>
+      <div class="sub">${x.version ? `<span>v${esc(x.version)}</span><span class="sep"></span>` : ''}<span class="ues">${ue}</span></div></div></button>`;
+}
+function viewFabLib() {
+  const L = S.fabLib, d = L.data;
+  if (!d && !L.loading) loadFabLib();
+  const items = d ? d.items : [];
+  const count = (ty) => (ty === 'all' ? items.length : items.filter((x) => x.type === ty).length);
+  const ues = [...new Set(items.flatMap((x) => x.ue))].sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+  const roots = d ? d.roots : [];
+  const origin = (r) => t('fl.o.' + r.origin);
+  const list = fabFiltered();
+  const body = fabBody(d, roots, items, list);
+  return fabLayout(L, d, roots, items, list, ues, count, origin, body);
+}
+function fabBody(d, roots, items, list) {
+  let body;
+  if (!d) body = `<div class="empty"><div><div class="ill"><span class="spinner" style="width:26px;height:26px;border-width:3px"></span></div><b>${t('fl.scanning')}</b>${t('fl.scanningSub')}</div></div>`;
+  else if (!roots.length) body = `<div class="empty"><div><div class="ill">${icon('cart', 36)}</div><b>${t('fl.noCache')}</b>${t('fl.noCacheSub')}
+      <div class="acts"><button class="btn" data-act="fabOpen" data-url="https://www.fab.com">${icon('external', 15)} ${t('fl.openFab')}</button><button class="btn pri" data-act="fabLibAdd">${icon('folderPlus', 15)} ${t('fl.addFolder')}</button></div></div></div>`;
+  else if (!items.length) body = `<div class="empty"><div><div class="ill">${icon('box', 36)}</div><b>${t('fl.empty')}</b>${t('fl.emptySub')}</div></div>`;
+  else if (!list.length) body = `<div class="empty"><div><div class="ill">${icon('search', 34)}</div><b>${t('lib.noMatch')}</b><div class="acts"><button class="btn" data-act="fabClear">${t('lib.clear')}</button></div></div></div>`;
+  else body = `<div class="fab libgrid">${list.map(fabLibCard).join('')}</div>`;
+  return body;
+}
+function fabLayout(L, d, roots, items, list, ues, count, origin, body) {
+  return `
+  <aside class="panel side">
+    <h2>${t('fl.title')}</h2>
+    <div class="nlist">${FAB_TYPES.map(([ty, ic]) => `<button class="nitem ${S.fabType === ty ? 'on' : ''}" data-act="fabType" data-t="${ty}">${icon(ic, 19)}<span class="lbl">${t('fl.t.' + ty)}</span>${count(ty) ? `<span class="count">${count(ty)}</span>` : ''}<span class="chev">${icon('chevron', 15)}</span></button>`).join('')}</div>
+    ${ues.length ? `<div class="sec">${t('fl.byUe')}</div><div class="tagcloud">${ues.map((v) => `<span class="chip btnlike ${S.fabUe === v ? 'on' : ''}" data-act="fabUe" data-v="${esc(v)}">${ueIcon(12)} ${esc(v)}</span>`).join('')}</div>` : ''}
+    <div class="sec">${t('fl.sources')}<span style="flex:1"></span><button class="btn sm ghost" data-act="fabLibAdd" title="${t('fl.addFolderD')}">${icon('folderPlus', 14)}</button></div>
+    <div class="flist">${roots.map((r) => `<div class="fitem" title="${esc(r.path)}">${icon(r.origin === 'custom' ? 'folder' : r.origin === 'fab' ? 'cart' : 'download', 15)}<span>${esc(r.path)}<small>${origin(r)}${r.missing ? ' · ' + t('fl.missing') : ` · ${t('fl.nAssets', { n: r.count || 0 })}`}</small></span>
+      <button class="btn sm icon ghost" data-act="openDir" data-dir="${esc(r.path)}" title="${t('act.folder')}">${icon('app:explorer', 15)}</button>
+      ${r.origin === 'custom' ? `<button class="btn sm icon ghost" data-act="fabLibRemove" data-p="${esc(r.path)}" title="${t('btn.remove')}">${icon('x', 14)}</button>` : ''}</div>`).join('') || `<small style="color:var(--dim);padding:0 6px">${t('fl.noSources')}</small>`}</div>
+  </aside>
+  <section class="panel main">
+    <h2>${t('fl.assets')} <span class="count" id="fabCount">${list.length}</span>${d && d.scanned ? `<span class="sub">${t('scan.idle', { t: ago(d.scanned).toLowerCase() })}</span>` : ''}<span style="flex:1"></span>
+      <button class="btn sm" data-act="fabOpen" data-url="https://www.fab.com">${icon('external', 14)} ${t('fl.openFab')}</button>
+      <button class="btn sm" data-act="fabLibAdd" title="${t('fl.addFolderD')}">${icon('folderPlus', 15)} ${t('fl.addFolder')}</button>
+      <button class="btn sm pri" data-act="fabLibScan">${L.loading ? '<span class="spinner"></span>' : icon('refresh', 15)} ${L.loading ? t('btn.scanning') : t('fl.rescan')}</button></h2>
+    <div class="libbar">
+      <label class="field">${icon('search', 18)}<input id="fabSearch" placeholder="${t('fl.search')}" value="${esc(S.fabQ)}" spellcheck="false"/></label>
+      <select class="sel" id="fabSort" style="width:190px;height:46px;border-radius:14px">${['name', 'modified', 'type'].map((s) => `<option value="${s}" ${S.fabSort === s ? 'selected' : ''}>${t('fl.sort.' + s)}</option>`).join('')}</select>
+    </div>
+    <div class="hint"><span>${icon('info', 13)} ${t('fl.hint')}</span></div>
+    <div class="scroll" id="fabLibContent">${body}</div>
+  </section>`;
+}
+function fabItemModal(x) {
+  const ue = x.ue.length ? x.ue.map((v) => `<span class="chip">${ueIcon(12)} UE ${esc(v)}</span>`).join('') : `<span class="chip">${t('fl.ueUnknown')}</span>`;
+  openModal(`<div class="fabmodal"><div class="fabhero">${fabThumb(x)}</div>
+    <h3>${esc(x.name)}</h3>
+    <div class="chips" style="margin-top:10px"><span class="chip info">${t('fl.t.' + x.type)}</span>${x.version ? `<span class="chip">v${esc(x.version)}</span>` : ''}${x.category ? `<span class="chip">${esc(x.category)}</span>` : ''}${x.author ? `<span class="chip">${esc(x.author)}</span>` : ''}</div>
+    ${x.description ? `<p class="d" style="margin-top:12px">${esc(x.description)}</p>` : ''}
+    <div class="mbody">
+      <div class="mrow"><label>${t('fl.compatible')}</label><div class="chips">${ue}</div></div>
+      <div class="mrow"><label>${t('p.path')}</label>${x.paths.map((p) => `<div class="pathbox" style="margin-bottom:6px"><span title="${esc(p)}">${esc(p)}</span><button class="btn sm icon ghost" data-m="dir" data-p="${esc(p)}" title="${t('act.folder')}">${icon('app:explorer', 15)}</button><button class="btn sm icon ghost" data-m="copy" data-p="${esc(p)}" title="${t('act.copyPath')}">${icon('copy', 14)}</button></div>`).join('')}</div>
+    </div>
+    <div class="mfoot"><button class="btn ghost" id="mNo">${t('btn.close')}</button><button class="btn pri" id="mOk">${icon('external', 14)} ${t(x.link && x.link.exact ? 'fl.viewOnFab' : 'fl.searchOnFab')}</button></div></div>`, (m) => {
+    $('#mNo', m).onclick = closeModal;
+    $('#mOk', m).onclick = () => { call('openExternal', x.link.url); closeModal(); };
+    $$('[data-m=dir]', m).forEach((b) => (b.onclick = () => call('openFolder', b.dataset.p)));
+    $$('[data-m=copy]', m).forEach((b) => (b.onclick = async () => { await call('copy', b.dataset.p); toast(t('t.copied'), '', 'ok'); }));
+  });
+}
+
 function viewTasks() {
   const list = [...S.tasks].sort((a, b) => b.id - a.id);
   if (!S.tasks.find((x) => x.id === S.activeTask) && list[0]) S.activeTask = list[0].id;
@@ -629,6 +729,7 @@ function viewSettings() {
       ${row(t('set.accent'), t('set.accent.d'), `<div class="swatches">${Object.entries(ACCENTS).map(([k, c]) => `<button class="${(s.accent in ACCENTS ? s.accent : 'ink') === k ? 'on' : ''}" style="background:${c[isDark() ? 1 : 0]}" data-act="accent" data-v="${k}"></button>`).join('')}</div>`)}
       ${row(t('set.cardSize'), '', seg('cardSize', [['s', t('size.s')], ['m', t('size.m')], ['l', t('size.l')]]))}
       ${row(t('set.animations'), t('set.animations.d'), tog('animations'))}
+      ${row(t('set.splash'), t('set.splash.d'), tog('splash'))}
       ${row(t('set.clock24'), '', tog('use24h'))}
     </div>
     <h3 id="sec-scanning">${t('set.scanning')}</h3>
@@ -664,7 +765,7 @@ function viewSettings() {
         <div class="keys" style="padding:10px 0 0">
           <span>${t('k.palette')}</span><span><kbd>${MOD()}</kbd> <kbd>K</kbd></span>
           <span>${t('k.search')}</span><span><kbd>${MOD()}</kbd> <kbd>F</kbd></span>
-          <span>${t('k.views')}</span><span><kbd>${MOD()}</kbd> <kbd>1</kbd>–<kbd>5</kbd></span>
+          <span>${t('k.views')}</span><span><kbd>${MOD()}</kbd> <kbd>1</kbd>–<kbd>6</kbd></span>
           <span>${t('k.refresh')}</span><span><kbd>F5</kbd></span>
           <span>${t('k.theme')}</span><span><kbd>${MOD()}</kbd> <kbd>Shift</kbd> <kbd>L</kbd></span>
           <span>${t('k.launch')}</span><span><kbd>${MOD()}</kbd> <kbd>Enter</kbd></span>
@@ -678,6 +779,11 @@ function afterRender() {
     renderLibContent();
     $('#search').oninput = (e) => { S.search = e.target.value; renderLibContent(); };
     $('#sort').onchange = (e) => { S.sort = e.target.value; localStorage.setItem('sort', S.sort); renderLibContent(); };
+  }
+  if (S.view === 'fab') {
+    const paint = () => { const L = S.fabLib, d = L.data, list = fabFiltered(); $('#fabLibContent').innerHTML = fabBody(d, d ? d.roots : [], d ? d.items : [], list); $('#fabCount').textContent = list.length; };
+    $('#fabSearch').oninput = (e) => { S.fabQ = e.target.value; paint(); };
+    $('#fabSort').onchange = (e) => { S.fabSort = e.target.value; localStorage.setItem('fabSort', S.fabSort); paint(); };
   }
   if (S.view === 'tasks') fillTerm();
   if (S.view === 'project') bindProject();
@@ -777,7 +883,7 @@ function renderPalette(q) {
     { i: 'newProject', l: t('btn.newProject'), run: () => A.newProject() },
     { i: 'download', l: t('up.check'), run: () => { setView('settings'); setTimeout(() => { A.secGo({ dataset: { s: 'about' } }); A.updCheck(); }, 50); } },
     { i: 'gift', l: t('cmd.fab'), run: () => call('openExternal', 'https://www.fab.com/limited-time-free') },
-    ...[['home', 'home'], ['library', 'library'], ['engines', 'cpu'], ['tasks', 'terminal'], ['settings', 'settings']].map(([v, ic]) => ({ i: ic, l: t('cmd.go', { v: t('nav.' + v) }), run: () => setView(v) })),
+    ...[['home', 'home'], ['library', 'library'], ['engines', 'cpu'], ['fab', 'cart'], ['tasks', 'terminal'], ['settings', 'settings']].map(([v, ic]) => ({ i: ic, l: t('cmd.go', { v: t('nav.' + v) }), run: () => setView(v) })),
     ...['general', 'appearance', 'scanning', 'launch', 'data', 'about'].map((s) => ({ i: 'settings', l: `${t('nav.settings')} › ${t('set.' + s)}`, run: () => { setView('settings'); setTimeout(() => A.secGo({ dataset: { s } }), 50); } }))
   ].filter((c) => !q || c.l.toLowerCase().includes(q));
   const projs = sorted(S.projects).filter((p) => !q || [p.name, p.alias, ...p.tags].join(' ').toLowerCase().includes(q)).slice(0, q ? 8 : 5)
@@ -850,6 +956,14 @@ const A = {
   guideHide: () => { localStorage.setItem('guideDone', '1'); render(); },
   fabOpen: (el) => call('openExternal', el.dataset.url),
   fabRetry: () => { loadFab(true); render(); },
+  fabType: (el) => { S.fabType = el.dataset.t; renderView(); },
+  fabUe: (el) => { S.fabUe = S.fabUe === el.dataset.v ? '' : el.dataset.v; renderView(); },
+  fabClear: () => { S.fabType = 'all'; S.fabUe = ''; S.fabQ = ''; renderView(); },
+  fabItem: (el) => { const x = S.fabLib.data && S.fabLib.data.items.find((i) => i.id === el.dataset.id); if (x) fabItemModal(x); },
+  fabLibScan: () => loadFabLib(true),
+  fabLibAdd: async () => { S.fabLib.loading = true; renderView(); fabLibDone(await api.fabLibraryAddFolder()); },
+  fabLibRemove: async (el) => { S.fabLib.loading = true; renderView(); fabLibDone(await api.fabLibraryRemoveFolder(el.dataset.p)); },
+  openDir: (el) => call('openFolder', el.dataset.dir),
   launch: (el) => launch(kOf(el)),
   game: (el) => launch(kOf(el), { mode: 'game' }),
   menu: (el) => { const r = el.getBoundingClientRect(); projectMenu(P(kOf(el)), r.left, r.bottom + 6); },
@@ -1072,7 +1186,7 @@ document.addEventListener('keydown', (e) => {
   if (mod && key === 'k') { e.preventDefault(); $('#palette').classList.contains('on') ? closePalette() : openPalette(); }
   else if (mod && key === 'f') { e.preventDefault(); if (S.view !== 'library') setView('library'); setTimeout(() => $('#search') && $('#search').focus(), 30); }
   else if (mod && e.shiftKey && key === 'l') { e.preventDefault(); A.theme(); }
-  else if (mod && /^[1-5]$/.test(e.key)) { e.preventDefault(); setView(['home', 'library', 'engines', 'tasks', 'settings'][+e.key - 1]); }
+  else if (mod && /^[1-6]$/.test(e.key)) { e.preventDefault(); setView(['home', 'library', 'engines', 'fab', 'tasks', 'settings'][+e.key - 1]); }
   else if (e.key === 'F5') { e.preventDefault(); A.scan(); }
   else if (e.key === 'Enter' && mod && S.view === 'project') launch(S.selected);
   else if (e.key === 'F12') api.win('devtools');
@@ -1159,11 +1273,16 @@ api.onWindow((m) => { S.maximized = m.maximized; renderTop(); });
 
 
 (async () => {
-  const d = await call('load');
-  if (!d) return;
-  const tk = await call('tasks'); if (tk) S.tasks = tk;
-  S.view = 'home';
-  applyData(d);
-  const si = await api.sysIcons();
-  if (si.ok && si.data) { Object.assign(APP_ICONS, si.data); render(); }
+  try {
+    const d = await call('load');
+    if (!d) return;
+    const tk = await call('tasks'); if (tk) S.tasks = tk;
+    S.view = 'home';
+    const si = await api.sysIcons();
+    if (si.ok && si.data) Object.assign(APP_ICONS, si.data);
+    applyData(d);
+  } finally {
+    // first render done (the window is still hidden, so no rAF): the main process swaps the splash for it
+    api.ready();
+  }
 })();

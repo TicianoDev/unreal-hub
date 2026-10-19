@@ -1,7 +1,7 @@
 {
   "name": "unreal-hub",
   "productName": "Unreal Hub",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "Unreal Hub - a fast, beautiful launcher for your Unreal Engine projects. Developed by jsTici & Zorac.",
   "main": "src/main.js",
   "author": "jsTici & Zorac",

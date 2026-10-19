@@ -12,7 +12,10 @@ const IS_WIN = process.platform === 'win32';
 const IS_MAC = process.platform === 'darwin';
 let win = null;
 
-if (!app.requestSingleInstanceLock()) { app.quit(); }
+// Single instance: a second launch exits at once and brings the running hub to the front
+// (restored from minimized or from the tray, or the splash while it is still loading).
+const PRIMARY = app.requestSingleInstanceLock();
+if (!PRIMARY) app.exit(0);
 app.on('second-instance', (_e, argv) => { if (!handleArgv(argv)) showWindow(); });
 
 // Thumbnails are served from a disk cache through uh://thumb/ instead of being kept in memory as data URLs.
@@ -52,7 +55,9 @@ const DEFAULT_STORE = {
     notifications: true,
     startMinimized: false,
     fabFree: true,
-    autoUpdate: true
+    autoUpdate: true,
+    splash: true,
+    fabFolders: []
   }
 };
 let store = null;
@@ -847,10 +852,19 @@ async function screenshots(p) {
 
 let tray = null, quitting = false;
 function showWindow() {
-  if (!app.isReady()) return;
+  if (!app.isReady() || !store) return;
   if (!win || win.isDestroyed()) { createWindow(true); return; }
+  // still loading behind the splash: bring the splash forward, the window follows when it is ready
+  if (splash && !splash.isDestroyed() && !win.isVisible()) { winWantsFocus = true; bringToFront(splash); return; }
   if (win.isMinimized()) win.restore();
-  win.show(); win.focus();
+  if (!win.isVisible()) win.show();
+  bringToFront(win);
+}
+// Windows only lets the foreground app take focus; briefly going always-on-top gets past the focus-stealing guard.
+function bringToFront(w) {
+  if (IS_WIN) { w.setAlwaysOnTop(true); w.show(); w.focus(); w.setAlwaysOnTop(false); }
+  else { w.show(); w.focus(); }
+  if (w === win) app.focus({ steal: true });
 }
 function recentForMenus(n) {
   return [...projectCache].filter((p) => p.lastLaunched).sort((a, b) => b.lastLaunched - a.lastLaunched).slice(0, n);
@@ -1068,6 +1082,203 @@ function scheduleUpdateChecks() {
   setInterval(auto, 6 * 3600000);
 }
 
+/* ------------------------------------------------------------------ Fab / Vault library (assets already downloaded) */
+// Where the Epic launchers and Fab keep downloaded assets. Only folders that exist are used.
+async function fabCacheRoots() {
+  const found = new Map();
+  const add = (p, origin) => {
+    if (!p) return;
+    const r = path.resolve(String(p).trim().replace(/^"|"$/g, ''));
+    if (!found.has(normKey(r))) found.set(normKey(r), { path: r, origin });
+  };
+  if (IS_WIN) {
+    const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData/Local');
+    add(path.join(process.env.ProgramData || 'C:/ProgramData', 'Epic/EpicGamesLauncher/VaultCache'), 'launcher');
+    // classic launcher: custom vault location in its settings
+    for (const sub of ['Windows', 'WindowsEditor']) {
+      try {
+        const ini = await readText(path.join(local, 'EpicGamesLauncher/Saved/Config', sub, 'GameUserSettings.ini'));
+        for (const m of ini.matchAll(/^\s*[\w.]*vault[\w.]*\s*=\s*"?([A-Za-z]:[\\/][^"\r\n]*)/gim)) add(m[1], 'launcher');
+      } catch {}
+    }
+    // new launcher (eglv2): any vault/Fab path in its settings, and its install folder
+    try {
+      const s = await readJson(path.join(local, 'com.epicgames.eglv2/settings/app-settings.json'));
+      const walk = (o) => { for (const [k, v] of Object.entries(o || {})) {
+        if (v && typeof v === 'object') walk(v);
+        else if (typeof v === 'string' && /^[A-Za-z]:[\\/]/.test(v) && /vault|fab/i.test(k)) add(v, 'launcher');
+        else if (typeof v === 'string' && /^[A-Za-z]:[\\/]/.test(v) && /installdir/i.test(k)) { add(path.join(v, 'VaultCache'), 'launcher'); add(path.join(v, 'Fab'), 'fab'); }
+      } };
+      walk(s);
+    } catch {}
+    add(path.join(local, 'UnrealEngine/Common/Fab'), 'fab');
+    add(path.join(local, 'EpicGames/Fab'), 'fab');
+    for (let c = 67; c <= 90; c++) {
+      const d = String.fromCharCode(c) + ':\\';
+      if (!fs.existsSync(d)) continue;
+      for (const rel of ['Epic Games/VaultCache', 'Program Files/Epic Games/VaultCache', 'VaultCache', 'Fab', 'Epic Games/Fab']) add(path.join(d, rel), rel.includes('Fab') ? 'fab' : 'launcher');
+    }
+  } else if (IS_MAC) {
+    add('/Users/Shared/UnrealEngine/Launcher/VaultCache', 'launcher');
+  }
+  add(path.join(os.homedir(), 'Documents/Fab'), 'fab');
+  const out = [];
+  for (const r of found.values()) if (await exists(r.path)) out.push({ ...r, auto: true });
+  for (const f of store.settings.fabFolders || []) out.push({ path: f, origin: 'custom', auto: false, missing: !(await exists(f)) });
+  return out;
+}
+
+const FAB_SKIP = new Set(['binaries', 'intermediate', 'saved', 'deriveddatacache', 'source', '.git', '.vs', 'config', 'resources', 'shaders', 'extras']);
+const GENERIC_DIR = /^(data|content|plugins?|assets|unreal|ue[45]?|\d[\d.]*)$/i;
+// Finds every asset under a folder: a .uproject (project), a .uplugin (plugin) or a Content folder (content pack).
+// Nothing inside an asset is looked at again, so a folder grouping several assets yields all of them.
+async function fabMarkers(dir, depth, out, top) {
+  let entries;
+  try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return out; }
+  const files = entries.filter((e) => e.isFile()).map((e) => e.name);
+  const up = files.find((n) => /\.uproject$/i.test(n)), pl = files.find((n) => /\.uplugin$/i.test(n));
+  const content = entries.find((e) => e.isDirectory() && e.name.toLowerCase() === 'content');
+  const images = files.filter((n) => IMG_RE.test(n)).slice(0, 12).map((n) => path.join(dir, n));
+  if (up) { out.push({ type: 'project', dir, file: path.join(dir, up), top: top || dir, images }); return out; }
+  if (pl) { out.push({ type: 'plugin', dir, file: path.join(dir, pl), top: top || dir, images }); return out; }
+  if (content) { out.push({ type: 'content', dir, file: path.join(dir, content.name), top: top || dir, images }); return out; }
+  if (depth <= 0) return out;
+  for (const e of entries) {
+    if (!e.isDirectory() || e.name.startsWith('.') || FAB_SKIP.has(e.name.toLowerCase())) continue;
+    await fabMarkers(path.join(dir, e.name), depth - 1, out, top || path.join(dir, e.name));
+  }
+  return out;
+}
+// Engine a content pack was saved with: .uasset headers carry the build branch (e.g. "++UE5+Release-5.3").
+async function savedWithUE(contentDir) {
+  const files = [];
+  const walk = async (d, depth) => {
+    let list; try { list = await fsp.readdir(d, { withFileTypes: true }); } catch { return; }
+    for (const e of list) {
+      if (files.length >= 4) return;
+      if (e.isFile() && /\.(uasset|umap)$/i.test(e.name)) files.push(path.join(d, e.name));
+      else if (e.isDirectory() && depth > 0) await walk(path.join(d, e.name), depth - 1);
+    }
+  };
+  await walk(contentDir, 4);
+  const vers = new Set();
+  for (const f of files) {
+    let fh;
+    try {
+      fh = await fsp.open(f, 'r');
+      const buf = Buffer.alloc(65536);
+      const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+      const m = buf.toString('latin1', 0, bytesRead).match(/\+\+UE([45])\+Release-(\d+\.\d+)/);
+      if (m) vers.add(m[2]);
+    } catch {} finally { if (fh) await fh.close().catch(() => {}); }
+  }
+  return [...vers];
+}
+// Launcher vault manifest: app name and build version (JSON manifests; binary ones only give the version).
+async function vaultManifest(dir) {
+  for (const f of ['manifest', 'manifest.json']) {
+    try {
+      const b = await fsp.readFile(path.join(dir, f));
+      const txt = b.toString('utf8');
+      if (txt.trimStart().startsWith('{')) { const j = JSON.parse(txt); return { app: j.AppNameString || '', build: (String(j.BuildVersionString || '').match(/^d+(?:.d+)+/) || [''])[0] }; }
+      const m = b.toString('latin1').match(/\b(\d+\.\d+(?:\.\d+)?)-[\w.+-]*Release/);
+      return { app: '', build: m ? m[1] : '' };
+    } catch {}
+  }
+  return null;
+}
+const words = (n) => String(n || '').replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_\-]+/g, ' ').replace(/\s+/g, ' ').trim();
+const ueOf = (s) => [...new Set((String(s || '').match(/(?:^|[^\d.])([45]\.\d{1,2})(?!\d)/g) || []).map((x) => x.replace(/^[^\d]/, '')))];
+const prettyName = (s) => words(String(s || '').replace(/[0-9a-f]{20,}/gi, '').replace(/[_\s-]*(?:UE)?[45]\.\d{1,2}$/i, '')) || String(s || '');
+
+function fabLink(url, name) {
+  const u = String(url || '');
+  if (/^https:\/\/(www\.)?fab\.com\/listings\//i.test(u)) return { url: u, exact: true };
+  const slug = (u.match(/marketplace\/(?:content|product)\/([^/?#]+)/i) || [])[1];
+  return { url: `https://www.fab.com/search?q=${encodeURIComponent(slug ? words(slug) : name)}`, exact: false };
+}
+
+async function fabAnalyze(m, origin, shared) {
+  // the folder that names the asset: its top-level folder, unless that folder holds several assets
+  const named = shared ? m.dir : m.top;
+  const nameDir = GENERIC_DIR.test(path.basename(named)) ? path.dirname(named) : named;
+  const man = await vaultManifest(m.top);
+  let st; try { st = await fsp.stat(m.dir); } catch { return null; }
+  const item = { id: hash(normKey(m.dir)), path: m.dir, origin, modified: st.mtimeMs, type: m.type, ue: [], version: '', description: '', category: '', author: '', thumbFile: null };
+  if (m.type === 'plugin') {
+    let j = {}; try { j = await readJson(m.file); } catch {}
+    Object.assign(item, {
+      name: j.FriendlyName || path.basename(m.file, '.uplugin'), version: j.VersionName || String(j.Version || ''),
+      description: j.Description || '', category: j.Category || '', author: j.CreatedBy || '',
+      ue: j.EngineVersion ? [String(j.EngineVersion).split('.').slice(0, 2).join('.')] : []
+    });
+    item.link = fabLink(j.MarketplaceURL || j.FabURL, item.name);
+    for (const ic of ['Resources/Icon128.png', 'Resources/Icon256.png', 'Resources/Icon.png']) if (await exists(path.join(m.dir, ic))) { item.thumbFile = path.join(m.dir, ic); break; }
+  } else if (m.type === 'project') {
+    let j = {}; try { j = await readJson(m.file); } catch {}
+    const nm = path.basename(m.file, '.uproject');
+    Object.assign(item, { name: nm, description: j.Description || '', ue: /^[45]\.\d+$/.test(j.EngineAssociation || '') ? [j.EngineAssociation] : [] });
+    item.link = fabLink('', item.name);
+    for (const c of [path.join(m.dir, nm + '.png'), path.join(m.dir, 'Saved/AutoScreenshot.png')]) if (await exists(c)) { item.thumbFile = c; break; }
+  } else {
+    item.name = prettyName((man && man.app) || path.basename(nameDir));
+    item.ue = await savedWithUE(m.file);
+    item.link = fabLink('', item.name);
+  }
+  if (man && man.build && !item.version) item.version = man.build;
+  item.ue = [...new Set([...item.ue, ...ueOf(path.basename(nameDir)), ...ueOf(man && man.app)])].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  if (!item.thumbFile) {
+    let imgs = m.images;
+    if (m.top !== m.dir) { try { imgs = imgs.concat((await fsp.readdir(m.top)).filter((n) => IMG_RE.test(n)).map((n) => path.join(m.top, n))); } catch {} }
+    item.thumbFile = imgs.find((x) => /thumb|preview|cover|icon|screenshot|splash|banner/i.test(path.basename(x))) || imgs[0] || null;
+  }
+  item.thumb = item.thumbFile ? await thumbRef(item.thumbFile, 480) : null;
+  return item;
+}
+
+async function fabScanRoot(root) {
+  const markers = await fabMarkers(root.path, 5, [], null);
+  const perTop = new Map();
+  for (const m of markers) perTop.set(m.top, (perTop.get(m.top) || 0) + 1);
+  const out = [];
+  for (let i = 0; i < markers.length; i += 8) {
+    const batch = await Promise.all(markers.slice(i, i + 8).map((m) => fabAnalyze(m, root.origin, perTop.get(m.top) > 1)));
+    for (const it of batch) if (it) out.push(it);
+  }
+  return out;
+}
+
+let fabLibScan = null;
+function scanFabLibrary() {
+  if (fabLibScan) return fabLibScan;
+  fabLibScan = (async () => {
+    const roots = await fabCacheRoots();
+    const all = [];
+    for (const r of roots) {
+      if (r.missing) continue;
+      const items = await fabScanRoot(r);
+      r.count = items.length;
+      all.push(...items);
+    }
+    // the same asset downloaded for several engine versions becomes one entry
+    const groups = new Map();
+    for (const it of all) {
+      const k = it.type + '|' + it.name.toLowerCase();
+      const g = groups.get(k);
+      if (!g) { groups.set(k, { ...it, paths: [it.path] }); continue; }
+      g.ue = [...new Set([...g.ue, ...it.ue])].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      g.paths.push(it.path);
+      if (!g.thumb && it.thumb) Object.assign(g, { thumb: it.thumb, thumbFile: it.thumbFile });
+      if (it.link && it.link.exact && !(g.link && g.link.exact)) g.link = it.link;
+      if (!g.description) g.description = it.description;
+    }
+    store.fabLib = { scanned: Date.now(), roots, items: [...groups.values()].sort((a, b) => a.name.localeCompare(b.name)) };
+    saveStore();
+    return store.fabLib;
+  })().finally(() => { fabLibScan = null; });
+  return fabLibScan;
+}
+
 async function systemIcons() {
   if (!IS_WIN) return {};
   const winDir = process.env.WINDIR || 'C:/Windows';
@@ -1110,9 +1321,30 @@ function registerIpc() {
   });
 
   h('data:load', async () => {
+    splashStatus(es() ? 'Detectando motores…' : 'Detecting engines…', 25);
+    await detectEngines();
+    splashStatus(es() ? 'Cargando proyectos…' : 'Loading projects…', 55);
     const d = await snapshot();
+    splashStatus(es() ? 'Preparando la interfaz…' : 'Preparing the interface…', 85);
     if (!startupScanDone && (store.settings.scanOnStartup || !store.lastScan)) { startupScanDone = true; setTimeout(deepScan, 600); }
     return d;
+  });
+  h('app:ready', async () => { revealMain(); });
+  // Fab / Vault library: the last scan is returned at once; a scan runs when there is none yet.
+  h('fablib:list', async () => store.fabLib || scanFabLibrary());
+  h('fablib:scan', async () => scanFabLibrary());
+  h('fablib:addFolder', async () => {
+    const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'] });
+    if (r.canceled) return null;
+    const list = store.settings.fabFolders || [];
+    if (!list.some((x) => normKey(x) === normKey(r.filePaths[0]))) store.settings.fabFolders = [...list, r.filePaths[0]];
+    saveStore();
+    return scanFabLibrary();
+  });
+  h('fablib:removeFolder', async (p) => {
+    store.settings.fabFolders = (store.settings.fabFolders || []).filter((x) => normKey(x) !== normKey(p));
+    saveStore();
+    return scanFabLibrary();
   });
   h('fab:free', async (force) => fabFree(!!force));
   h('update:check', async () => checkUpdate(true));
@@ -1462,8 +1694,60 @@ function registerIpc() {
   });
 }
 
+/* ------------------------------------------------------------------ Splash */
+// Accent colors (light / dark), same as the renderer, so the splash matches the app.
+const SPLASH_INK = {
+  ink: ['#1b1f3b', '#e9edf6'], blue: ['#2f62d6', '#6b97ff'], violet: ['#6a4fd6', '#a58cff'],
+  emerald: ['#13845a', '#3fcf93'], orange: ['#d65f24', '#ff8f57'], rose: ['#cf3767', '#ff6f9a'], slate: ['#475569', '#cbd5e1']
+};
+let splash = null, splashShownAt = 0, winWantsFocus = false;
+const es = () => store.settings.language === 'es';
+
+function createSplash() {
+  const dark = nativeTheme.shouldUseDarkColors;
+  splash = new BrowserWindow({
+    width: 380, height: 400, frame: false, transparent: true, resizable: false, movable: true,
+    minimizable: false, maximizable: false, fullscreenable: false, skipTaskbar: false, show: false,
+    title: 'Unreal Hub', backgroundColor: '#00000000', center: true,
+    icon: path.join(__dirname, 'assets', IS_WIN ? 'icon.ico' : 'icon.png'),
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false }
+  });
+  const ink = (SPLASH_INK[store.settings.accent] || SPLASH_INK.ink)[dark ? 1 : 0];
+  splash.loadFile(path.join(__dirname, 'splash.html'), {
+    query: { dark: dark ? '1' : '0', ink, v: app.getVersion(), s: es() ? 'Iniciando…' : 'Starting…' }
+  });
+  splash.once('ready-to-show', () => { splashShownAt = Date.now(); splash.show(); });
+  splash.on('closed', () => { splash = null; });
+}
+function splashStatus(text, pct) {
+  if (!splash || splash.isDestroyed()) return;
+  splash.webContents.executeJavaScript(`window.setStatus && setStatus(${JSON.stringify(text)}, ${pct === undefined ? 'undefined' : Number(pct)})`).catch(() => {});
+}
+// The main window is shown once its first render is done; the splash fades out over it.
+let revealed = false;
+function revealMain() {
+  if (revealed || !win || win.isDestroyed()) return;
+  revealed = true;
+  const go = () => {
+    if (!win || win.isDestroyed()) return;
+    win.show();
+    win.webContents.setBackgroundThrottling(true); // full speed only while loading hidden
+    if (winWantsFocus) bringToFront(win);
+    if (splash && !splash.isDestroyed()) {
+      splash.webContents.executeJavaScript('window.leave && leave()').catch(() => {});
+      setTimeout(() => { if (splash && !splash.isDestroyed()) splash.destroy(); }, 300);
+    }
+  };
+  if (!splash) return go();
+  splashStatus(es() ? 'Listo' : 'Ready', 100);
+  // keep the animation on screen long enough to be seen, never longer than needed
+  setTimeout(go, Math.max(0, 900 - (Date.now() - splashShownAt)));
+}
+
 let winBounds = null;
 function createWindow(focus = false) {
+  revealed = false;
+  winWantsFocus = focus;
   const dark = nativeTheme.shouldUseDarkColors;
   win = new BrowserWindow({
     width: 1440, height: 900, minWidth: 1100, minHeight: 680, ...(winBounds || {}),
@@ -1472,11 +1756,16 @@ function createWindow(focus = false) {
     icon: path.join(__dirname, 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
     frame: false,
     show: false,
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false, spellcheck: false, backgroundThrottling: true }
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false, spellcheck: false, backgroundThrottling: false }
   });
   win.removeMenu();
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-  win.once('ready-to-show', () => { win.show(); if (focus) win.focus(); });
+  // With the splash up, wait for the renderer's first render ('app:ready'); a timeout keeps it from ever hanging.
+  win.once('ready-to-show', () => {
+    if (!splash) return revealMain();
+    setTimeout(revealMain, 12000);
+  });
+  win.webContents.once('render-process-gone', () => revealMain());
   // Closing to the tray destroys the window instead of hiding it: the renderer's memory is given back
   // and the window is rebuilt in a moment when it is opened again from the tray or the taskbar.
   win.on('close', () => { if (!win.isMaximized() && !win.isMinimized()) winBounds = win.getBounds(); });
@@ -1490,6 +1779,7 @@ function createWindow(focus = false) {
 if (IS_WIN) app.setAppUserModelId('com.hsinjinshi.unrealhub');
 
 app.whenReady().then(() => {
+  if (!PRIMARY) return;
   loadStore();
   if (IS_WIN && !store.installerChecked) {
     store.installerChecked = true;
@@ -1505,7 +1795,10 @@ app.whenReady().then(() => {
   createTray();
   const hidden = process.argv.includes('--hidden') && store.settings.startMinimized && tray;
   if (hidden) detectEngines().then(detectProjects).catch(() => {}); // fill tray & jump list without opening a window
-  else createWindow();
+  else {
+    if (store.settings.splash !== false) createSplash();
+    createWindow();
+  }
   handleArgv(process.argv);
   setTimeout(() => { repairShortcuts().catch(() => {}); pruneThumbs(); }, 8000);
   scheduleUpdateChecks();

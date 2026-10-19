@@ -495,6 +495,24 @@ textarea.inp { height: auto; min-height: 220px; padding: 12px 14px; resize: vert
 .fabend { font-size: 12.5px; font-weight: 500; color: var(--warn); display: inline-flex; align-items: center; gap: 6px; }
 .fabph { aspect-ratio: 16/9; border-radius: 14px; margin: 8px 8px 0; background: linear-gradient(90deg, var(--card-2), var(--chip), var(--card-2)); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
 @keyframes shimmer { to { background-position: -200% 0; } }
+
+/* Fab / Vault library */
+.fab.libgrid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); padding: 8px 0 4px; }
+.fabc.lib .th { aspect-ratio: 16/10; display: grid; place-items: center; background: linear-gradient(160deg, var(--card-2), var(--chip)); }
+.fabc.lib .th img.icon { width: 46%; height: auto; aspect-ratio: 1; object-fit: contain; border-radius: 18px; filter: drop-shadow(0 6px 14px rgba(0,0,0,.18)); }
+.fabc.lib:hover .th img.icon { transform: scale(1.06); }
+.fabc.lib .th .ph { width: 100%; height: 100%; display: grid; place-items: center; color: rgba(255,255,255,.9); }
+.fabc .free.type-plugin { background: var(--info); }
+.fabc .free.type-content { background: var(--good); }
+.fabc .free.type-project { background: var(--warn); }
+.fabc .ues { display: inline-flex; gap: 4px; overflow: hidden; }
+.uev { height: 19px; padding: 0 6px; border-radius: 6px; background: var(--chip); color: var(--chip-t); font-size: 11px; font-weight: 600; display: inline-flex; align-items: center; }
+.uev.none { font-weight: 500; color: var(--muted); }
+.fitem span small { display: block; white-space: normal; color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; }
+.fabmodal .fabhero { aspect-ratio: 16/8; border-radius: 16px; overflow: hidden; margin: -4px -4px 16px; background: linear-gradient(160deg, var(--card-2), var(--chip)); display: grid; place-items: center; }
+.fabmodal .fabhero img { width: 100%; height: 100%; object-fit: cover; }
+.fabmodal .fabhero img.icon { width: 30%; height: auto; aspect-ratio: 1; object-fit: contain; }
+.fabmodal .fabhero .ph { width: 100%; height: 100%; display: grid; place-items: center; color: rgba(255,255,255,.9); }
 @media (max-width: 1280px) { .fab { grid-template-columns: repeat(3, 1fr); } .guide { grid-template-columns: 1fr; } }
 
 .uelogo {

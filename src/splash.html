@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' file: data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
+<title>Unreal Hub</title>
+<style>
+  :root {
+    --bg: rgba(240, 244, 248, .94); --border: rgba(255, 255, 255, .9); --text: #1c2433; --muted: #6c7787;
+    --track: rgba(29, 40, 58, .1); --ink: #1b1f3b; --ink-t: #ffffff; --shadow: 0 24px 70px rgba(20, 30, 50, .28);
+  }
+  html.dark {
+    --bg: rgba(20, 25, 35, .94); --border: rgba(255, 255, 255, .07); --text: #e8ecf3; --muted: #8b95a7;
+    --track: rgba(255, 255, 255, .08); --ink: #e9edf6; --ink-t: #11151d; --shadow: 0 30px 80px rgba(0, 0, 0, .6);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: transparent; overflow: hidden; user-select: none; -webkit-app-region: drag; cursor: default; }
+  body { display: grid; place-items: center; font: 14px/1.4 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; color: var(--text); }
+  .card {
+    width: 300px; height: 320px; border-radius: 30px; background: var(--bg); border: 1px solid var(--border);
+    box-shadow: var(--shadow); display: flex; flex-direction: column; align-items: center; justify-content: center;
+    animation: in .5s cubic-bezier(.2, .8, .2, 1) both;
+  }
+  html.out .card { animation: out .28s ease forwards; }
+  .mark { position: relative; width: 112px; height: 112px; display: grid; place-items: center; }
+  .badge {
+    width: 74px; height: 74px; border-radius: 24px; background: var(--ink); display: grid; place-items: center;
+    box-shadow: 0 10px 28px color-mix(in srgb, var(--ink) 35%, transparent); animation: breathe 2.4s ease-in-out infinite;
+  }
+  .logo {
+    width: 46px; height: 46px; background: var(--ink-t);
+    -webkit-mask: url("assets/logo.png") center / contain no-repeat; mask: url("assets/logo.png") center / contain no-repeat;
+    -webkit-mask-mode: luminance; mask-mode: luminance; animation: spin 6s linear infinite;
+  }
+  .ring { position: absolute; inset: 0; border-radius: 50%; border: 2.5px solid transparent; }
+  .ring.a { border-top-color: var(--ink); border-right-color: var(--ink); opacity: .55; animation: spin 1.6s cubic-bezier(.5, .1, .5, .9) infinite; }
+  .ring.b { inset: 9px; border-bottom-color: var(--ink); opacity: .25; animation: spin 2.4s cubic-bezier(.5, .1, .5, .9) infinite reverse; }
+  h1 { margin-top: 22px; font-size: 21px; font-weight: 650; letter-spacing: -.02em; }
+  .status { margin-top: 4px; height: 19px; font-size: 12.5px; color: var(--muted); transition: opacity .2s; }
+  .bar { margin-top: 18px; width: 150px; height: 4px; border-radius: 4px; background: var(--track); overflow: hidden; position: relative; }
+  .bar i { position: absolute; top: 0; bottom: 0; left: 0; width: 0; border-radius: 4px; background: var(--ink); transition: width .45s cubic-bezier(.2, .8, .2, 1); }
+  .bar.indet i { width: 38%; animation: slide 1.15s ease-in-out infinite; }
+  .ver { margin-top: 16px; font-size: 11px; color: var(--muted); opacity: .7; }
+  @keyframes in { from { opacity: 0; transform: scale(.94) translateY(6px); } }
+  @keyframes out { to { opacity: 0; transform: scale(1.03); } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes breathe { 50% { transform: scale(1.05); } }
+  @keyframes slide { from { left: -38%; } to { left: 100%; } }
+  @media (prefers-reduced-motion: reduce) { * { animation-duration: 0s !important; animation-iteration-count: 1 !important; } }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="mark"><span class="ring a"></span><span class="ring b"></span><div class="badge"><span class="logo"></span></div></div>
+    <h1>Unreal Hub</h1>
+    <div class="status" id="status"></div>
+    <div class="bar indet" id="bar"><i></i></div>
+    <div class="ver" id="ver"></div>
+  </div>
+<script>
+  const q = new URLSearchParams(location.search);
+  const root = document.documentElement;
+  if (q.get('dark') === '1') root.classList.add('dark');
+  if (q.get('ink')) root.style.setProperty('--ink', q.get('ink'));
+  document.getElementById('ver').textContent = q.get('v') ? 'v' + q.get('v') : '';
+  document.getElementById('status').textContent = q.get('s') || '';
+  // Called from the main process while the app loads.
+  window.setStatus = (text, pct) => {
+    const s = document.getElementById('status'), bar = document.getElementById('bar');
+    s.textContent = text || '';
+    if (typeof pct === 'number') { bar.classList.remove('indet'); bar.firstElementChild.style.width = Math.max(4, Math.min(100, pct)) + '%'; }
+  };
+  window.leave = () => root.classList.add('out');
+</script>
+</body>
+</html>

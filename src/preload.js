@@ -65,6 +65,11 @@ contextBridge.exposeInMainWorld('api', {
   clearTasks: invoke('task:clear'),
 
   fabFree: invoke('fab:free'),
+  ready: invoke('app:ready'),
+  fabLibrary: invoke('fablib:list'),
+  fabLibraryScan: invoke('fablib:scan'),
+  fabLibraryAddFolder: invoke('fablib:addFolder'),
+  fabLibraryRemoveFolder: invoke('fablib:removeFolder'),
   sysIcons: invoke('icons:system'),
 
   win: invoke('window:control'),
