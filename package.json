@@ -1,7 +1,7 @@
 {
   "name": "unreal-hub",
   "productName": "Unreal Hub",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Unreal Hub - a fast, beautiful launcher for your Unreal Engine projects. Developed by jsTici & Zorac.",
   "main": "src/main.js",
   "author": "jsTici & Zorac",
@@ -9,7 +9,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "dist": "electron-builder --win nsis",
+    "dist": "electron-builder --win msi",
     "dist:all": "electron-builder -mwl"
   },
   "devDependencies": {
@@ -31,7 +31,7 @@
     "win": {
       "target": [
         {
-          "target": "nsis",
+          "target": "msi",
           "arch": [
             "x64"
           ]
@@ -43,6 +43,17 @@
       "signtoolOptions": {
         "publisherName": "jsTici & Zorac"
       }
+    },
+    "msi": {
+      "oneClick": true,
+      "perMachine": false,
+      "upgradeCode": "640E7E3F-9F9D-427F-AC91-0DDF19A09357",
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "Unreal Hub",
+      "menuCategory": false,
+      "runAfterFinish": true,
+      "artifactName": "UnrealHub-Setup-${version}.msi"
     },
     "nsis": {
       "oneClick": false,
@@ -71,8 +82,7 @@
       "artifactName": "UnrealHub-Setup-${version}.exe",
       "uninstallDisplayName": "Unreal Hub ${version}",
       "include": "build/installer.nsh"
-    },
-    "electronVersion": "33.2.1"
+    }
   },
   "homepage": "https://github.com/TicianoDev/unreal-hub"
 }

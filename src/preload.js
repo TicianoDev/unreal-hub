@@ -37,6 +37,12 @@ contextBridge.exposeInMainWorld('api', {
   resetThumb: invoke('project:resetThumb'),
   details: invoke('project:details'),
   duplicate: invoke('project:duplicate'),
+  plugins: invoke('project:plugins'),
+  setPlugin: invoke('project:setPlugin'),
+
+  checkUpdate: invoke('update:check'),
+  downloadUpdate: invoke('update:download'),
+  installUpdate: invoke('update:install'),
 
   addFolder: invoke('folders:add'),
   removeFolder: invoke('folders:remove'),
@@ -58,6 +64,9 @@ contextBridge.exposeInMainWorld('api', {
   tasks: invoke('task:list'),
   clearTasks: invoke('task:clear'),
 
+  fabFree: invoke('fab:free'),
+  sysIcons: invoke('icons:system'),
+
   win: invoke('window:control'),
   pathForFile: (f) => { try { return webUtils.getPathForFile(f); } catch { return f.path || ''; } },
 
@@ -65,5 +74,6 @@ contextBridge.exposeInMainWorld('api', {
   onProjects: on('projects:update'),
   onScan: on('scan:state'),
   onWindow: on('window:state'),
-  onRunning: on('running:update')
+  onRunning: on('running:update'),
+  onUpdate: on('update:state')
 });

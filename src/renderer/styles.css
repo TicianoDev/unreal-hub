@@ -163,7 +163,7 @@ kbd { font: 600 11px/1 var(--font); padding: 4px 6px; border-radius: 6px; backgr
 .inp, .sel, textarea.inp { height: 38px; padding: 0 12px; border-radius: var(--r-s); border: 1px solid var(--line-2); background: var(--card); color: var(--text); outline: 0; font-size: 13.5px; transition: border-color var(--t), box-shadow var(--t); width: 100%; }
 .inp:focus, .sel:focus { border-color: color-mix(in srgb, var(--ink) 50%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 12%, transparent); }
 textarea.inp { height: auto; min-height: 220px; padding: 12px 14px; resize: vertical; line-height: 1.55; user-select: text; }
-.sel { appearance: none; padding-right: 30px; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23889' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px center; cursor: pointer; }
+.sel { appearance: none; padding-right: 30px; background-repeat: no-repeat; cursor: pointer; }
 .btn { height: 38px; padding: 0 14px; border-radius: var(--r-s); display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-size: 13.5px; font-weight: 500; white-space: nowrap; background: var(--card); color: var(--text); border: 1px solid var(--line-2); box-shadow: var(--shadow-s); transition: all var(--t) var(--ease); }
 .btn:hover { background: var(--card-2); }
 .btn:active { transform: scale(.98); }
@@ -332,6 +332,7 @@ textarea.inp { height: auto; min-height: 220px; padding: 12px 14px; resize: vert
 .ecard { padding: 20px; display: flex; flex-direction: column; gap: 14px; animation: pop .35s var(--ease) both; }
 .ecard .top2 { display: flex; align-items: center; gap: 14px; }
 .ecard .badge { width: 52px; height: 52px; border-radius: 16px; background: var(--ink); color: var(--ink-t); display: grid; place-items: center; flex: none; }
+.ecard .badge.real { background: var(--card-2); box-shadow: inset 0 0 0 1px var(--line); }
 .ecard .ver { font-size: 22px; font-weight: 650; letter-spacing: -.02em; }
 .ecard .acts { display: flex; gap: 8px; flex-wrap: wrap; }
 .ecard .stats2 { display: flex; gap: 16px; color: var(--muted); font-size: 12.5px; }
@@ -439,6 +440,63 @@ textarea.inp { height: auto; min-height: 220px; padding: 12px 14px; resize: vert
 @media (max-width: 1380px) { .stats { grid-template-columns: repeat(3, 1fr); } }
 
 
+/* native Windows icon font */
+.fi {
+  font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets"; font-style: normal; font-weight: normal;
+  line-height: 1; display: inline-grid; place-items: center; flex: none; speak: never;
+  -webkit-font-smoothing: antialiased; vertical-align: -2px; user-select: none;
+}
+.btn .fi, .chip .fi, .tile-chip .fi, .b .fi { vertical-align: 0; }
+/* official Unreal logo from the installed engine, tinted with the current color */
+.uemask { display: inline-block; flex: none; vertical-align: -2px; background: currentColor;
+  -webkit-mask-size: contain; mask-size: contain; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-position: center; mask-position: center; }
+.pc .badges .b .uemask { color: #1c2433; }
+/* real program icons (Unreal Editor, Explorer, PowerShell, IDE) */
+.appi { display: inline-block; object-fit: contain; flex: none; vertical-align: -3px; image-rendering: -webkit-optimize-contrast; }
+.sel { background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 15px) 50%, calc(100% - 10px) 50%; background-size: 5px 5px, 5px 5px; }
+
+/* rail with visible labels: people find things without hovering */
+.rail { width: 78px; }
+.rail .r.lab { width: 64px; height: 56px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; }
+.rail .r.lab .nl { font-size: 10.5px; font-weight: 500; line-height: 1.1; color: var(--muted); max-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail .r.lab.on .nl, .rail .r.lab:hover .nl { color: var(--text); }
+.rail .r.lab .dot { top: 6px; right: 12px; }
+.rail .logo img, .rail .logo .uelogo { pointer-events: none; }
+.crumb .lnk { cursor: pointer; border-radius: 7px; padding: 2px 6px; margin: 0 -6px; transition: background var(--t), color var(--t); -webkit-app-region: no-drag; }
+.crumb .lnk:hover { background: var(--hover); color: var(--text); }
+.hint { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; color: var(--muted); font-size: 12px; margin: 2px 4px 6px; }
+.hint span { display: inline-flex; align-items: center; gap: 6px; }
+.hint kbd { font-size: 10.5px; padding: 3px 5px; }
+
+/* first steps guide */
+.guide { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.guide .step { display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px; border-radius: var(--r-m); background: var(--card); border: 1px solid var(--card-b); box-shadow: var(--shadow-s); text-align: left; transition: transform var(--t) var(--ease), box-shadow var(--t); }
+.guide .step:hover { transform: translateY(-1px); box-shadow: var(--shadow); }
+.guide .step .n { width: 28px; height: 28px; border-radius: 9px; background: var(--ink); color: var(--ink-t); display: grid; place-items: center; font-weight: 650; font-size: 13px; flex: none; }
+.guide .step.done .n { background: var(--good); color: #fff; }
+.guide .step b { display: block; font-weight: 600; font-size: 13.5px; }
+.guide .step small { color: var(--muted); font-size: 12.5px; }
+
+/* Fab limited-time free */
+.fab { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.fabc { position: relative; border-radius: var(--r-l); background: var(--card); border: 1px solid var(--card-b); box-shadow: var(--shadow-s); overflow: hidden; cursor: pointer; text-align: left; transition: transform .28s var(--ease), box-shadow .28s var(--ease); animation: pop .35s var(--ease) both; }
+.fabc:hover { transform: translateY(-3px); box-shadow: var(--shadow); }
+.fabc .th { position: relative; aspect-ratio: 16/9; margin: 8px 8px 0; border-radius: 14px; overflow: hidden; background: var(--card-2); }
+.fabc .th img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .5s var(--ease); }
+.fabc:hover .th img { transform: scale(1.04); }
+.fabc .free { position: absolute; top: 8px; left: 8px; height: 24px; padding: 0 9px; border-radius: 7px; background: var(--good); color: #fff; font-size: 11.5px; font-weight: 650; display: inline-flex; align-items: center; gap: 5px; }
+.fabc .meta { padding: 12px 14px 14px; }
+.fabc .nm { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fabc .sub { display: flex; align-items: center; gap: 8px; margin-top: 5px; color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; }
+.fabc .sub s { color: var(--dim); }
+.fabc .sub .sep { width: 3px; height: 3px; border-radius: 3px; background: var(--dim); flex: none; }
+.fabc .sub .by { overflow: hidden; text-overflow: ellipsis; }
+.fabend { font-size: 12.5px; font-weight: 500; color: var(--warn); display: inline-flex; align-items: center; gap: 6px; }
+.fabph { aspect-ratio: 16/9; border-radius: 14px; margin: 8px 8px 0; background: linear-gradient(90deg, var(--card-2), var(--chip), var(--card-2)); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
+@keyframes shimmer { to { background-position: -200% 0; } }
+@media (max-width: 1280px) { .fab { grid-template-columns: repeat(3, 1fr); } .guide { grid-template-columns: 1fr; } }
+
 .uelogo {
   display: inline-block;
   flex: none;
@@ -448,3 +506,10 @@ textarea.inp { height: auto; min-height: 220px; padding: 12px 14px; resize: vert
   -webkit-mask-position: center; mask-position: center;
   -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
 }
+/* Plugin manager */
+.citem.plg { cursor: default; padding: 10px 14px; }
+.plg .ptop { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 3px; }
+.plg .ptop b { font-weight: 600; margin-right: 4px; }
+.plg .ptop .chip { height: 21px; padding: 0 7px; font-size: 11.5px; border-radius: 6px; }
+.plg small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.toggle:disabled { opacity: .5; }

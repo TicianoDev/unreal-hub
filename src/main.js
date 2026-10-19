@@ -1,10 +1,11 @@
 
-const { app, BrowserWindow, ipcMain, dialog, shell, nativeImage, nativeTheme, clipboard, Tray, Menu, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, nativeImage, nativeTheme, clipboard, Tray, Menu, Notification, protocol, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fsp = fs.promises;
 const os = require('os');
 const crypto = require('crypto');
+const { pathToFileURL } = require('url');
 const { spawn, execFile } = require('child_process');
 
 const IS_WIN = process.platform === 'win32';
@@ -13,6 +14,11 @@ let win = null;
 
 if (!app.requestSingleInstanceLock()) { app.quit(); }
 app.on('second-instance', (_e, argv) => { if (!handleArgv(argv)) showWindow(); });
+
+// Thumbnails are served from a disk cache through uh://thumb/ instead of being kept in memory as data URLs.
+protocol.registerSchemesAsPrivileged([{ scheme: 'uh', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
+// Chromium keeps a spare renderer process warm for fast navigation; the hub has a single page, so it is wasted RAM.
+app.commandLine.appendSwitch('disable-features', 'SpareRendererForSitePerProcess');
 
 const DEFAULT_STORE = {
   scanFolders: [],
@@ -44,7 +50,9 @@ const DEFAULT_STORE = {
     shortcutTarget: 'editor', 
     closeToTray: true,
     notifications: true,
-    startMinimized: false
+    startMinimized: false,
+    fabFree: true,
+    autoUpdate: true
   }
 };
 let store = null;
@@ -132,6 +140,31 @@ async function engineVersion(root) {
   } catch { return null; }
 }
 
+// Real program icons (Unreal Editor, Explorer, PowerShell, IDE) read from the files themselves,
+// small PNG data URLs cached per file.
+const iconCache = new Map();
+async function exeIcon(file) {
+  if (iconCache.has(file)) return iconCache.get(file);
+  let url = '';
+  try { const img = await app.getFileIcon(file, { size: 'large' }); if (!img.isEmpty()) url = img.toDataURL(); } catch {}
+  iconCache.set(file, url);
+  return url;
+}
+
+// The official Unreal logo shipped inside each engine (the one the editor itself uses).
+async function engineLogo(root) {
+  for (const rel of ['Engine/Content/Slate/Starship/Common/UELogo.png', 'Engine/Content/Editor/Slate/About/UnrealLogo.png']) {
+    const f = path.join(root, rel);
+    if (iconCache.has(f)) return iconCache.get(f);
+    if (!(await exists(f))) continue;
+    const img = nativeImage.createFromPath(f);
+    const url = img.isEmpty() ? '' : img.toDataURL();
+    iconCache.set(f, url);
+    if (url) return url;
+  }
+  return '';
+}
+
 let engineCache = [];
 async function detectEngines() {
   const found = new Map();
@@ -145,7 +178,8 @@ async function detectEngines() {
     const version = await engineVersion(root);
     const assoc = association || (version ? version.split('.').slice(0, 2).join('.') : '');
     const meta = (store.meta['engine:' + key]) || {};
-    found.set(key, { key, root, exe, version: version || assoc, association: assoc, source, size: meta.size || 0 });
+    const logo = await engineLogo(root);
+    found.set(key, { key, root, exe, version: version || assoc, association: assoc, source, size: meta.size || 0, logo, icon: logo ? '' : await exeIcon(exe) });
   };
 
   if (IS_WIN) {
@@ -312,22 +346,51 @@ function deepScan() {
   return scanning;
 }
 
-const thumbCache = new Map();
+const IMG_RE = /\.(png|jpe?g|bmp)$/i;
+const thumbDir = () => userFile('Cache', 'thumbs');
 
-function thumbUrl(file, width = 640) {
+// URL the renderer loads; the image is resized once and kept on disk, so nothing big lives in RAM.
+async function thumbRef(file, width = 640, mtime) {
   try {
-    const st = fs.statSync(file);
-    if (!st.size || st.size > 40 * 1024 * 1024) return null;
-    const c = thumbCache.get(file);
-    if (c && c.mtime === st.mtimeMs) return c.url;
-    let img = nativeImage.createFromPath(file);
-    if (img.isEmpty()) return null;
-    const s = img.getSize();
-    if (s.width > width) img = img.resize({ width, quality: 'good' });
-    const url = img.toDataURL();
-    thumbCache.set(file, { mtime: st.mtimeMs, url });
-    return url;
+    if (mtime === undefined) {
+      const st = await fsp.stat(file);
+      if (!st.size || st.size > 40 * 1024 * 1024) return null;
+      mtime = st.mtimeMs;
+    }
+    return `uh://thumb/?p=${encodeURIComponent(file)}&w=${width}&v=${Math.round(mtime)}`;
   } catch { return null; }
+}
+async function cachedThumb(file, width, v) {
+  const out = path.join(thumbDir(), `${hash(file + '|' + v + '|' + width)}.jpg`);
+  if (await exists(out)) return out;
+  let img = nativeImage.createFromPath(file);
+  if (img.isEmpty()) return null;
+  if (img.getSize().width > width) img = img.resize({ width, quality: 'good' });
+  await fsp.mkdir(thumbDir(), { recursive: true });
+  await fsp.writeFile(out, img.toJPEG(86));
+  return out;
+}
+function registerThumbProtocol() {
+  protocol.handle('uh', async (req) => {
+    try {
+      const u = new URL(req.url);
+      const file = u.searchParams.get('p') || '';
+      if (u.host !== 'thumb' || !IMG_RE.test(file)) return new Response(null, { status: 404 });
+      const width = Math.min(1280, Math.max(64, Number(u.searchParams.get('w')) || 640));
+      const out = await cachedThumb(file, width, u.searchParams.get('v') || '');
+      return out ? net.fetch(pathToFileURL(out).toString()) : new Response(null, { status: 404 });
+    } catch { return new Response(null, { status: 404 }); }
+  });
+}
+// Drop cached thumbnails not used for a month.
+async function pruneThumbs() {
+  let files = [];
+  try { files = await fsp.readdir(thumbDir()); } catch { return; }
+  const old = Date.now() - 30 * 86400000;
+  for (const f of files) {
+    const fp = path.join(thumbDir(), f);
+    try { if ((await fsp.stat(fp)).atimeMs < old) await fsp.rm(fp, { force: true }); } catch {}
+  }
 }
 
 async function newestImage(dir, depth = 2) {
@@ -440,7 +503,7 @@ async function readProject(file) {
     git: lower.includes('.git') ? await gitInfo(dir) : null,
     created: st.birthtimeMs || st.ctimeMs,
     modified,
-    thumb: tf ? thumbUrl(tf) : null,
+    thumb: tf ? await thumbRef(tf, 640) : null,
     thumbFile: tf,
     customThumb: !!meta.thumbPath,
     favorite: !!meta.favorite,
@@ -485,6 +548,98 @@ async function detectProjects() {
   return out;
 }
 
+// Read-modify-write of a .uproject, keeping the previous version as .uproject.bak.
+async function editUproject(p, fn) {
+  let raw = await fsp.readFile(p.file, 'utf8');
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+  const j = JSON.parse(raw);
+  await fsp.writeFile(p.file + '.bak', raw);
+  fn(j);
+  await fsp.writeFile(p.file, JSON.stringify(j, null, '\t'));
+  return j;
+}
+
+/* ------------------------------------------------------------------ Plugins */
+const PLUGIN_SKIP = new Set(['content', 'source', 'binaries', 'intermediate', 'resources', 'config', 'shaders', 'thirdparty', 'saved', 'docs']);
+async function findUplugins(dir, depth, out) {
+  let entries;
+  try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return out; }
+  const up = entries.find((e) => e.isFile() && e.name.toLowerCase().endsWith('.uplugin'));
+  if (up) { out.push(path.join(dir, up.name)); return out; }
+  if (depth <= 0) return out;
+  await Promise.all(entries.filter((e) => e.isDirectory() && !PLUGIN_SKIP.has(e.name.toLowerCase()))
+    .map((e) => findUplugins(path.join(dir, e.name), depth - 1, out)));
+  return out;
+}
+async function readPlugins(root, source) {
+  const list = [];
+  for (const f of await findUplugins(root, 6, [])) {
+    let j;
+    try { j = await readJson(f); } catch { continue; }
+    list.push({
+      name: path.basename(f, '.uplugin'),
+      friendly: j.FriendlyName || '',
+      desc: j.Description || '',
+      category: j.Category || '',
+      version: j.VersionName || '',
+      engineVersion: j.EngineVersion || '',
+      byDefault: j.EnabledByDefault,
+      beta: !!j.IsBetaVersion,
+      experimental: !!j.IsExperimentalVersion,
+      deps: (j.Plugins || []).filter((d) => d && d.Name && d.Enabled !== false).map((d) => d.Name),
+      source: source === 'engine' && /\/plugins\/marketplace\//.test(normKey(f)) ? 'fab' : source
+    });
+  }
+  return list;
+}
+// An engine ships hundreds of plugins: read them once per engine.
+const enginePluginCache = new Map();
+function enginePlugins(e) {
+  if (!enginePluginCache.has(e.key)) enginePluginCache.set(e.key, readPlugins(path.join(e.root, 'Engine', 'Plugins'), 'engine'));
+  return enginePluginCache.get(e.key);
+}
+const majorMinor = (v) => String(v || '').split('.').slice(0, 2).join('.');
+
+async function projectPlugins(p) {
+  const j = await readJson(p.file);
+  const refs = new Map((j.Plugins || []).filter((x) => x && x.Name).map((x) => [x.Name.toLowerCase(), x]));
+  const e = engineFor(p);
+  const all = new Map();
+  for (const pl of e ? await enginePlugins(e) : []) all.set(pl.name.toLowerCase(), pl);
+  for (const pl of await readPlugins(path.join(p.dir, 'Plugins'), 'project')) all.set(pl.name.toLowerCase(), pl); // a project copy wins over the engine one
+  const ev = e ? majorMinor(e.version) : '';
+  const out = [];
+  for (const [k, pl] of all) {
+    const ref = refs.get(k);
+    // Unreal's rule: project plugins are on unless they opt out, engine plugins are off unless they opt in.
+    const def = pl.source === 'project' ? pl.byDefault !== false : pl.byDefault === true;
+    const enabled = ref ? ref.Enabled !== false : def;
+    const pv = majorMinor(pl.engineVersion);
+    out.push({ ...pl, enabled, explicit: !!ref, issues: enabled && ev && pv && pv !== ev ? ['version:' + pv] : [] });
+  }
+  for (const [k, ref] of refs) {
+    if (all.has(k) || ref.Enabled === false) continue;
+    out.push({ name: ref.Name, friendly: '', desc: '', category: '', version: '', deps: [], source: 'missing', enabled: true, explicit: true, issues: e ? ['missing'] : [] });
+  }
+  if (e) {
+    const names = new Set(out.map((x) => x.name.toLowerCase()));
+    for (const pl of out) if (pl.enabled) for (const d of pl.deps) if (!names.has(d.toLowerCase())) pl.issues.push('dep:' + d);
+  }
+  out.sort((a, b) => (a.friendly || a.name).localeCompare(b.friendly || b.name));
+  return { engine: e ? e.version : '', engineMissing: !e, running: running.has(p.key), plugins: out, names: p.plugins };
+}
+
+async function setProjectPlugin(p, name, enabled) {
+  const j = await editUproject(p, (j) => {
+    j.Plugins = Array.isArray(j.Plugins) ? j.Plugins : [];
+    const ref = j.Plugins.find((x) => x && x.Name && x.Name.toLowerCase() === name.toLowerCase());
+    if (ref) ref.Enabled = enabled;
+    else j.Plugins.push({ Name: name, Enabled: enabled });
+  });
+  p.plugins = j.Plugins.filter((x) => x.Enabled).map((x) => x.Name);
+  return projectPlugins(p);
+}
+
 const getProject = (key) => {
   const p = projectCache.find((x) => x.key === key);
   if (!p) throw new Error('Project not found. Try refreshing.');
@@ -515,7 +670,7 @@ function startTask(title, project, command, args, opts = {}) {
   const onData = (d) => {
     const chunk = d.toString();
     task.log += chunk;
-    if (task.log.length > 600000) task.log = task.log.slice(-500000);
+    if (task.log.length > 300000) task.log = task.log.slice(-250000);
     sendTask({ type: 'log', id, chunk });
   };
   child.stdout && child.stdout.on('data', onData);
@@ -558,6 +713,34 @@ async function targetPaths(project, t) {
   return list;
 }
 
+// Without its own AppUserModelID, Windows ties every UnrealEditor.exe window to whichever project shortcut
+// targets that exe, so the taskbar shows that project's picture for every project and for the engine itself.
+const shortcutAumid = (key, mode) => `UnrealHub.Project.${hash(key)}${mode === 'game' ? '.Game' : ''}`;
+
+// Give shortcuts made by older versions their own AppUserModelID (runs once).
+async function repairShortcuts() {
+  if (!IS_WIN || store.shortcutsRepaired) return;
+  const iconDir = normKey(userFile('icons'));
+  const dirs = [app.getPath('desktop'), path.join(process.env.PUBLIC || 'C:/Users/Public', 'Desktop'),
+    path.join(app.getPath('appData'), 'Microsoft/Windows/Start Menu/Programs')];
+  for (const dir of dirs) {
+    let files = [];
+    try { files = (await fsp.readdir(dir)).filter((f) => f.toLowerCase().endsWith('.lnk')); } catch {}
+    for (const f of files) {
+      const lnk = path.join(dir, f);
+      try {
+        const s = shell.readShortcutLink(lnk);
+        if (!s.icon || !normKey(s.icon).startsWith(iconDir) || s.appUserModelId) continue;
+        const m = (s.args || '').match(/"([^"]+\.uproject)"/i) || [null, s.target];
+        const key = normKey(m[1] || lnk);
+        shell.writeShortcutLink(lnk, 'update', { appUserModelId: shortcutAumid(key, /\s-game\b/.test(s.args || '') ? 'game' : '') });
+      } catch {}
+    }
+  }
+  store.shortcutsRepaired = true;
+  saveStore();
+}
+
 async function createShortcut(p, opts = {}) {
   const e = engineFor(p, opts.engineKey);
   const desktop = opts.dir || app.getPath('desktop');
@@ -577,7 +760,8 @@ async function createShortcut(p, opts = {}) {
       args: useEditor ? `${q(p.file)}${gameArgs}${extra ? ' ' + extra : ''}` : '',
       cwd: p.dir,
       description: `Unreal Engine project - ${p.name}${e ? ' (UE ' + e.version + ')' : ''}`,
-      icon: ico, iconIndex: 0
+      icon: ico, iconIndex: 0,
+      appUserModelId: shortcutAumid(p.key, opts.mode)
     });
     if (!ok) throw new Error('Windows refused to create the shortcut.');
     return lnk;
@@ -657,12 +841,17 @@ async function screenshots(p) {
   await walk(path.join(p.dir, 'Saved', 'AutoScreenshot.png').replace(/AutoScreenshot\.png$/, ''), 0);
   try { for (const f of await fsp.readdir(p.dir)) if (/\.(png|jpe?g)$/i.test(f)) out.push({ file: path.join(p.dir, f), t: (await fsp.stat(path.join(p.dir, f))).mtimeMs }); } catch {}
   const seen = new Set();
-  return out.sort((a, b) => b.t - a.t).filter((x) => !seen.has(x.file) && seen.add(x.file)).slice(0, 48)
-    .map((x) => ({ ...x, url: thumbUrl(x.file, 420) })).filter((x) => x.url);
+  const list = out.sort((a, b) => b.t - a.t).filter((x) => !seen.has(x.file) && seen.add(x.file)).slice(0, 48);
+  return (await Promise.all(list.map(async (x) => ({ ...x, url: await thumbRef(x.file, 420, x.t) })))).filter((x) => x.url);
 }
 
 let tray = null, quitting = false;
-function showWindow() { if (!win) return; if (win.isMinimized()) win.restore(); win.show(); win.focus(); }
+function showWindow() {
+  if (!app.isReady()) return;
+  if (!win || win.isDestroyed()) { createWindow(true); return; }
+  if (win.isMinimized()) win.restore();
+  win.show(); win.focus();
+}
 function recentForMenus(n) {
   return [...projectCache].filter((p) => p.lastLaunched).sort((a, b) => b.lastLaunched - a.lastLaunched).slice(0, n);
 }
@@ -717,6 +906,180 @@ function handleArgv(argv) {
   return true;
 }
 
+/* ------------------------------------------------------------------ Fab limited-time free assets */
+const FAB_BLADE = 'https://www.fab.com/i/blades/free_content_blade';
+const FAB_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
+let fabPending = null;
+
+function fabItem(l) {
+  const lic = (l.licenses || []).find((x) => x.priceTier && x.priceTier.discountEndDate) || (l.licenses || [])[0] || {};
+  const tier = lic.priceTier || {};
+  const imgs = ((l.thumbnails || [])[0] || {}).images || [];
+  const img = [...imgs].sort((a, b) => a.width - b.width).find((i) => i.width >= 480) || imgs[imgs.length - 1];
+  return {
+    uid: l.uid,
+    title: l.title || '',
+    seller: (l.user && l.user.sellerName) || '',
+    type: l.listingType || '',
+    rating: l.averageRating || 0,
+    reviews: l.reviewCount || 0,
+    price: tier.price ?? (l.startingPrice && l.startingPrice.price) ?? 0,
+    currency: tier.currencyCode || 'USD',
+    end: Date.parse(tier.discountEndDate || '') || 0,
+    image: img ? img.url : '',
+    url: `https://www.fab.com/listings/${l.uid}`
+  };
+}
+// Cached until the giveaway ends (or 6 h), so the network is touched rarely.
+function fabFree(force = false) {
+  const c = store.fab, now = Date.now();
+  if (!force && c && c.items && c.items.length && now < c.end && now - c.fetched < 6 * 3600000) return Promise.resolve(c);
+  if (fabPending) return fabPending;
+  fabPending = (async () => {
+    try {
+      const r = await net.fetch(FAB_BLADE, { headers: { 'User-Agent': FAB_UA, Accept: 'application/json' } });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const j = await r.json();
+      const items = (j.tiles || []).map((x) => x.listing).filter((l) => l && l.uid).map(fabItem);
+      if (!items.length) throw new Error('EMPTY');
+      const ends = items.map((x) => x.end).filter(Boolean);
+      store.fab = { fetched: now, end: ends.length ? Math.min(...ends) : now + 86400000, items };
+      saveStore();
+      return store.fab;
+    } catch (err) {
+      if (c && c.items && c.items.length) return { ...c, stale: true };
+      throw new Error('FAB_OFFLINE');
+    }
+  })().finally(() => { fabPending = null; });
+  return fabPending;
+}
+
+/* ------------------------------------------------------------------ Updates (GitHub Releases) */
+// The repository comes from package.json "homepage"; any release whose tag is newer than this build and
+// that carries a Windows .msi is offered. The MSI shares one UpgradeCode, so it replaces the installed version.
+const REPO = (String(require('../package.json').homepage || '').match(/github\.com\/([^/#?]+\/[^/#?]+)/) || [])[1]?.replace(/\.git$/, '') || '';
+const GH_HEADERS = () => ({ 'User-Agent': 'UnrealHub/' + app.getVersion(), Accept: 'application/vnd.github+json' });
+let update = { state: 'idle' };   // idle | checking | none | available | downloading | ready | error
+let release = null;               // the offered release: asset + checksum sources + downloaded file
+let notifiedVersion = '';
+const setUpdate = (patch) => { update = { ...update, ...patch }; send('update:state', update); };
+function cmpVer(a, b) {
+  const x = String(a).split(/\D+/).filter(Boolean).map(Number), y = String(b).split(/\D+/).filter(Boolean).map(Number);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0);
+  return 0;
+}
+
+async function checkUpdate(manual = false) {
+  if (!REPO) throw new Error('NO_REPO');
+  if (['checking', 'downloading', 'ready'].includes(update.state)) return update;
+  setUpdate({ state: 'checking', error: '' });
+  try {
+    const r = await net.fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: GH_HEADERS() });
+    if (r.status === 404) { setUpdate({ state: 'none', checked: Date.now() }); return update; } // no release published yet
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const rel = await r.json();
+    const version = String(rel.tag_name || '').replace(/^v/i, '');
+    const assets = rel.assets || [];
+    const msi = assets.filter((a) => /\.msi$/i.test(a.name)).sort((a, b) => /setup/i.test(b.name) - /setup/i.test(a.name))[0];
+    store.updateChecked = Date.now();
+    saveStore();
+    if (!version || !msi || cmpVer(version, app.getVersion()) <= 0) { release = null; setUpdate({ state: 'none', checked: store.updateChecked }); return update; }
+    release = {
+      name: msi.name, url: msi.browser_download_url, body: rel.body || '',
+      sums: assets.filter((a) => /sha-?256|checksum/i.test(a.name)).map((a) => a.browser_download_url)
+    };
+    setUpdate({ state: 'available', version, notes: (rel.body || '').slice(0, 3000), page: rel.html_url, size: msi.size, published: Date.parse(rel.published_at) || 0, checked: store.updateChecked });
+    if (!manual && version !== notifiedVersion && (!win || !win.isFocused())) {
+      notify('Unreal Hub', (store.settings.language === 'es' ? 'Nueva versión disponible: ' : 'Update available: ') + version);
+    }
+    notifiedVersion = version;
+  } catch (err) {
+    setUpdate({ state: 'error', error: err.message });
+  }
+  return update;
+}
+
+// SHA-256 published with the release: a checksum asset, or a hash in the release notes.
+async function expectedSha(rel) {
+  const texts = [rel.body];
+  for (const u of rel.sums) { try { const r = await net.fetch(u, { headers: GH_HEADERS() }); if (r.ok) texts.push(await r.text()); } catch {} }
+  const HEX = /\b[a-f0-9]{64}\b/i;
+  for (const tx of texts) {
+    const line = String(tx || '').split(/\r?\n/).find((l) => l.includes(rel.name) && HEX.test(l));
+    if (line) return line.match(HEX)[0].toLowerCase();
+  }
+  const all = new Set((texts.join('\n').match(/\b[a-f0-9]{64}\b/gi) || []).map((x) => x.toLowerCase()));
+  return all.size === 1 ? [...all][0] : '';
+}
+
+async function downloadUpdate() {
+  if (update.state !== 'available' || !release) return update;
+  const dir = userFile('Cache', 'updates');
+  await fsp.rm(dir, { recursive: true, force: true });
+  await fsp.mkdir(dir, { recursive: true });
+  const file = path.join(dir, safeName(release.name));
+  setUpdate({ state: 'downloading', pct: 0, error: '' });
+  try {
+    const r = await net.fetch(release.url, { headers: { 'User-Agent': GH_HEADERS()['User-Agent'] } });
+    if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
+    const total = Number(r.headers.get('content-length')) || update.size || 0;
+    const sha = crypto.createHash('sha256');
+    const out = fs.createWriteStream(file);
+    let writeErr = null;
+    out.on('error', (e) => { writeErr = e; });
+    const reader = r.body.getReader();
+    let got = 0, last = -1;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (writeErr) throw writeErr;
+      const buf = Buffer.from(value);
+      sha.update(buf);
+      got += buf.length;
+      if (!out.write(buf)) await new Promise((res) => out.once('drain', res));
+      const pct = total ? Math.min(99, Math.floor((got / total) * 100)) : 0;
+      if (pct !== last) { last = pct; setUpdate({ pct }); }
+    }
+    await new Promise((res, rej) => { out.once('error', rej); out.end(res); });
+    const want = await expectedSha(release);
+    if (want && want !== sha.digest('hex')) throw new Error('CHECKSUM');
+    release.file = file;
+    setUpdate({ state: 'ready', pct: 100, verified: !!want });
+  } catch (err) {
+    await fsp.rm(file, { force: true }).catch(() => {});
+    setUpdate({ state: 'available', pct: 0, error: err.message });
+    throw err;
+  }
+  return update;
+}
+
+function installUpdate() {
+  if (update.state !== 'ready' || !release || !release.file) throw new Error('NOT_READY');
+  if (!app.isPackaged) throw new Error('DEV_MODE');
+  spawn('msiexec.exe', ['/i', release.file], { detached: true, stdio: 'ignore' }).unref();
+  quitting = true;
+  setTimeout(() => app.quit(), 300);
+}
+
+function scheduleUpdateChecks() {
+  if (!IS_WIN || !REPO) return;
+  const auto = () => { if (store.settings.autoUpdate) checkUpdate().catch(() => {}); };
+  setTimeout(auto, 15000);
+  setInterval(auto, 6 * 3600000);
+}
+
+async function systemIcons() {
+  if (!IS_WIN) return {};
+  const winDir = process.env.WINDIR || 'C:/Windows';
+  const sln = projectCache.find((p) => p.sln && /\.slnx?$/i.test(p.sln));
+  const [explorer, terminal, ide] = await Promise.all([
+    exeIcon(path.join(winDir, 'explorer.exe')),
+    exeIcon(path.join(winDir, 'System32/WindowsPowerShell/v1.0/powershell.exe')),
+    sln ? app.getFileIcon(sln.sln, { size: 'large' }).then((i) => (i.isEmpty() ? '' : i.toDataURL())).catch(() => '') : ''
+  ]);
+  return { explorer, terminal, ide };
+}
+
 /* ------------------------------------------------------------------ IPC */
 function applySystemSettings() {
   nativeTheme.themeSource = store.settings.theme || 'system';
@@ -724,6 +1087,7 @@ function applySystemSettings() {
   updateTray();
 }
 
+let startupScanDone = false;
 function registerIpc() {
   const h = (ch, fn) => ipcMain.handle(ch, async (_e, ...a) => {
     try { return { ok: true, data: await fn(...a) }; } catch (err) { return { ok: false, error: err.message }; }
@@ -741,14 +1105,20 @@ function registerIpc() {
     hidden: store.hiddenProjects.length,
     sessions: store.sessions,
     running: [...running.keys()],
-    paths: { userData: app.getPath('userData'), desktop: app.getPath('desktop') }
+    update: { ...update, checked: update.checked || store.updateChecked || 0 },
+    paths:{ userData: app.getPath('userData'), desktop: app.getPath('desktop') }
   });
 
   h('data:load', async () => {
     const d = await snapshot();
-    if (store.settings.scanOnStartup || !store.lastScan) setTimeout(deepScan, 600);
+    if (!startupScanDone && (store.settings.scanOnStartup || !store.lastScan)) { startupScanDone = true; setTimeout(deepScan, 600); }
     return d;
   });
+  h('fab:free', async (force) => fabFree(!!force));
+  h('update:check', async () => checkUpdate(true));
+  h('update:download', async () => downloadUpdate());
+  h('update:install', async () => installUpdate());
+  h('icons:system', async () => systemIcons());
   h('data:refresh', async () => snapshot());
   h('scan:now', async () => { deepScan(); });
   h('scan:cancel', async () => { scanCancel = true; });
@@ -935,18 +1305,15 @@ function registerIpc() {
     const p = getProject(key);
     const e = engineCache.find((x) => x.key === engineKey);
     if (!e) throw new Error('Engine not found.');
-    let raw = await fsp.readFile(p.file, 'utf8');
-    if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
-    await fsp.writeFile(p.file + '.bak', raw);
-    const j = JSON.parse(raw);
-    j.EngineAssociation = e.association;
-    await fsp.writeFile(p.file, JSON.stringify(j, null, '\t'));
+    await editUproject(p, (j) => { j.EngineAssociation = e.association; });
     p.association = e.association;
     setMeta(key, { engineKey: '' });
     return { association: e.association };
   });
 
   h('project:meta', async (key, patch) => { setMeta(key, patch); });
+  h('project:plugins', async (key, force) => { if (force) enginePluginCache.clear(); return projectPlugins(getProject(key)); });
+  h('project:setPlugin', async (key, name, enabled) => setProjectPlugin(getProject(key), String(name), !!enabled));
 
   h('project:pickThumb', async (key) => {
     const r = await dialog.showOpenDialog(win, { filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'bmp'] }], properties: ['openFile'] });
@@ -1057,6 +1424,7 @@ function registerIpc() {
     store.settings = { ...store.settings, ...patch };
     saveStore();
     if ('theme' in patch || 'openAtLogin' in patch) applySystemSettings();
+    if (patch.autoUpdate) checkUpdate().catch(() => {});
     return store.settings;
   });
 
@@ -1094,22 +1462,25 @@ function registerIpc() {
   });
 }
 
-function createWindow() {
+let winBounds = null;
+function createWindow(focus = false) {
   const dark = nativeTheme.shouldUseDarkColors;
   win = new BrowserWindow({
-    width: 1440, height: 900, minWidth: 1100, minHeight: 680,
+    width: 1440, height: 900, minWidth: 1100, minHeight: 680, ...(winBounds || {}),
     backgroundColor: dark ? '#0d1017' : '#dfe6ec',
     title: 'Unreal Hub',
     icon: path.join(__dirname, 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
     frame: false,
     show: false,
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false }
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false, spellcheck: false, backgroundThrottling: true }
   });
   win.removeMenu();
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-  const hidden = process.argv.includes('--hidden') && store.settings.startMinimized;
-  win.once('ready-to-show', () => { if (!hidden) win.show(); });
-  win.on('close', (e) => { if (!quitting && store.settings.closeToTray && tray) { e.preventDefault(); win.hide(); } });
+  win.once('ready-to-show', () => { win.show(); if (focus) win.focus(); });
+  // Closing to the tray destroys the window instead of hiding it: the renderer's memory is given back
+  // and the window is rebuilt in a moment when it is opened again from the tray or the taskbar.
+  win.on('close', () => { if (!win.isMaximized() && !win.isMinimized()) winBounds = win.getBounds(); });
+  win.on('closed', () => { win = null; });
   win.on('maximize', () => send('window:state', { maximized: true }));
   win.on('unmaximize', () => send('window:state', { maximized: false }));
   win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
@@ -1129,14 +1500,20 @@ app.whenReady().then(() => {
     saveStore();
   }
   applySystemSettings();
+  registerThumbProtocol();
   registerIpc();
-  createWindow();
   createTray();
+  const hidden = process.argv.includes('--hidden') && store.settings.startMinimized && tray;
+  if (hidden) detectEngines().then(detectProjects).catch(() => {}); // fill tray & jump list without opening a window
+  else createWindow();
   handleArgv(process.argv);
+  setTimeout(() => { repairShortcuts().catch(() => {}); pruneThumbs(); }, 8000);
+  scheduleUpdateChecks();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 app.on('before-quit', () => { quitting = true; saveStore(true); });
 app.on('window-all-closed', () => {
+  if (!quitting && store.settings.closeToTray && tray) return; // keep living in the tray
   for (const t of tasks.values()) if (t.status === 'running') t.kill();
   if (!IS_MAC) app.quit();
 });

@@ -6,7 +6,9 @@ const S = {
   sort: localStorage.getItem('sort') || 'activity',
   closed: JSON.parse(localStorage.getItem('closed') || '{}'),
   cal: new Date(), ptab: 'overview', analysis: {}, details: {}, cleanSel: {},
-  tasks: [], activeTask: null, running: [], sessions: [], gallery: {}, scan: { on: false, dir: '', found: 0 }, maximized: false
+  tasks: [], activeTask: null, running: [], sessions: [], gallery: {}, scan: { on: false, dir: '', found: 0 }, maximized: false,
+  fab: { state: 'idle', data: null, tried: 0 },
+  plugins: {}, plgFilter: 'project', plgSearch: '', update: { state: 'idle' }
 };
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -29,7 +31,7 @@ async function call(fn, ...args) {
 function showError(code = '') {
   const m = String(code);
   if (m.startsWith('NO_ENGINE')) return toast(t('t.noEngine'), t('t.noEngineSub', { v: m.split(':')[1] || '?' }), 'bad');
-  const map = { NO_SLN: ['t.noSln', 't.noSlnSub'], BP_ONLY: ['t.bpOnly'], BAD_NAME: ['t.badName', 'm.dupHint'], EXISTS: ['t.exists'], NO_EDITOR: ['t.noEditor'] };
+  const map = { NO_SLN: ['t.noSln', 't.noSlnSub'], BP_ONLY: ['t.bpOnly'], BAD_NAME: ['t.badName', 'm.dupHint'], EXISTS: ['t.exists'], NO_EDITOR: ['t.noEditor'], CHECKSUM: ['up.checksum', 'up.checksumSub'], DEV_MODE: ['up.dev', 'up.devSub'], NO_REPO: ['up.noRepo'] };
   if (map[m]) return toast(t(map[m][0]), map[m][1] ? t(map[m][1]) : '', 'bad');
   toast(t('t.error'), m, 'bad');
 }
@@ -55,7 +57,7 @@ const words = (n) => n.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_\-]+/g,
 function hue(str) { let h = 0; for (const c of str) h = (h * 31 + c.charCodeAt(0)) % 360; return h; }
 const pname = (p) => p.alias || p.name;
 function thumb(p, label = true) {
-  if (p.thumb) return `<img src="${p.thumb}" alt="" draggable="false" loading="lazy"/>`;
+  if (p.thumb) return `<img src="${esc(p.thumb)}" alt="" draggable="false" loading="lazy" decoding="async"/>`;
   const h = hue(p.name);
   return `<div class="ph" style="background:linear-gradient(135deg,hsl(${h} 42% 52%),hsl(${(h + 50) % 360} 48% 26%))">${label ? esc(words(pname(p))) : esc(p.name.slice(0, 2).toUpperCase())}<span class="wm">${icon('ue', 110)}</span></div>`;
 }
@@ -101,11 +103,14 @@ function toast(title, msg = '', kind = '') {
 
 function applyData(d) {
   if (!d) return;
-  for (const k of ['engines', 'projects', 'settings', 'scanFolders', 'history', 'lastScan', 'platform', 'version', 'hidden', 'sessions', 'running']) if (d[k] !== undefined) S[k] = d[k];
+  for (const k of ['engines', 'projects', 'settings', 'scanFolders', 'history', 'lastScan', 'platform', 'version', 'hidden', 'sessions', 'running', 'update']) if (d[k] !== undefined) S[k] = d[k];
+  syncUeIcon();
   if (S.view === 'project' && !P(S.selected)) S.view = 'library';
   applyTheme();
   render();
 }
+// Generic Unreal logo = the icon of the newest installed editor.
+function syncUeIcon() { APP_ICONS.ueEngine = S.engines.find((x) => x.logo || x.icon) || null; }
 function collMatch(p, c) {
   if (c === 'all') return true;
   if (c === 'fav') return p.favorite;
@@ -154,19 +159,20 @@ function setView(v, opts = {}) {
 function renderRail() {
   const running = S.tasks.filter((x) => x.status === 'running').length;
   const cur = S.view === 'project' ? 'library' : S.view;
+  const nav = (v, i, extra = '') => `<button class="r lab ${cur === v ? 'on' : ''}" data-act="go" data-v="${v}" title="${t('nav.' + v + '.d')}">${icon(i, 20)}<span class="nl">${t('nav.' + v)}</span>${extra}</button>`;
   $('#rail').innerHTML = `
-    <div class="logo">${icon('ue', 26)}</div>
-    ${[['home', 'home'], ['library', 'library'], ['engines', 'cpu'], ['tasks', 'terminal']].map(([v, i]) => `<button class="r ${cur === v ? 'on' : ''}" data-act="go" data-v="${v}">${icon(i, 21)}${v === 'tasks' && running ? '<span class="dot spin"></span>' : ''}<span class="tip">${t('nav.' + v)}</span></button>`).join('')}
+    <div class="logo" data-act="go" data-v="home" title="Unreal Hub" style="cursor:pointer">${hubLogo(28)}</div>
+    ${nav('home', 'home')}${nav('library', 'library')}${nav('engines', 'cpu')}${nav('tasks', 'terminal', running ? '<span class="dot spin"></span>' : '')}
     <div class="sp"></div>
-    <button class="r" data-act="theme">${icon(isDark() ? 'sun' : 'moon', 20)}<span class="tip">${t('k.theme')}</span></button>
+    <button class="r" data-act="theme">${icon(isDark() ? 'sun' : 'moon', 19)}<span class="tip">${t('k.theme')}</span></button>
     <button class="r" data-act="lang" style="font-weight:700;font-size:12px">${LANG.toUpperCase()}<span class="tip">${t('set.language')}</span></button>
-    <button class="r ${cur === 'settings' ? 'on' : ''}" data-act="go" data-v="settings">${icon('settings', 21)}<span class="tip">${t('nav.settings')}</span></button>`;
+    ${nav('settings', 'settings', ['available', 'ready'].includes(S.update.state) ? '<span class="dot"></span>' : '')}`;
 }
 function renderTop() {
   const p = S.view === 'project' ? P(S.selected) : null;
   const crumb = p
-    ? `<button class="back" data-act="back">${icon('chevronLeft', 18)}</button><span>${t('nav.' + (S.back || 'library'))}</span>${icon('chevron', 14)}<b>${esc(pname(p))}</b>`
-    : `<span>${t('crumb.hub')}</span> <b>${t('nav.' + S.view)}</b><span class="ic">${icon('ue', 16)}</span>`;
+    ? `<button class="back" data-act="back" title="${t('btn.back')} (Esc)">${icon('chevronLeft', 16)}</button><span class="lnk" data-act="back">${t('nav.' + (S.back || 'library'))}</span>${icon('chevron', 12)}<b>${esc(pname(p))}</b>`
+    : `<span class="lnk" data-act="go" data-v="home">${t('crumb.hub')}</span>${icon('chevron', 12)}<b>${t('nav.' + S.view)}</b>`;
   const sc = S.scan;
   const scanHtml = sc.on
     ? `<div class="scanchip on"><span class="spinner"></span><span class="lbl">${t('scan.running', { d: esc(sc.dir || '…') })}</span><span class="count">${sc.found}</span><button class="x" data-act="cancelScan">${icon('x', 13)}</button></div>`
@@ -174,8 +180,8 @@ function renderTop() {
   $('#top').innerHTML = `
     <div class="crumb">${crumb}</div><div class="grow"></div>${scanHtml}
     <div class="search-pill" data-act="palette">${icon('search', 15)}<span>${t('pal.placeholder')}</span><kbd>${MOD()} K</kbd></div>
-    <button class="tbtn" data-act="scan" title="${t('btn.scan')}">${icon('refresh', 17)}</button>
-    <div class="winctl"><button data-act="win" data-w="min">${icon('minimize', 15)}</button><button data-act="win" data-w="max">${icon(S.maximized ? 'restore' : 'maximize', 13)}</button><button data-act="win" data-w="close" class="x">${icon('x', 15)}</button></div>`;
+    <button class="tbtn" data-act="scan" title="${t('btn.scan')} (F5)">${icon('refresh', 17)}</button>
+    <div class="winctl"><button data-act="win" data-w="min" title="${t('win.min')}">${icon('minimize', 12)}</button><button data-act="win" data-w="max" title="${t(S.maximized ? 'win.restore' : 'win.max')}">${icon(S.maximized ? 'restore' : 'maximize', 12)}</button><button data-act="win" data-w="close" class="x" title="${t(S.settings.closeToTray ? 'win.tray' : 'btn.close')}">${icon('close', 12)}</button></div>`;
 }
 function renderView() {
   const fn = { home: viewHome, library: viewLibrary, project: viewProject, engines: viewEngines, tasks: viewTasks, settings: viewSettings }[S.view];
@@ -222,10 +228,10 @@ function calendar() {
 }
 function projectCard(p, i = 0) {
   const e = engineOf(p), k = esc(p.key);
-  return `<div class="pc" data-act="open" data-key="${k}" data-dbl="launch" style="animation-delay:${Math.min(i, 16) * 22}ms">
+  return `<div class="pc" data-act="open" data-key="${k}" data-dbl="launch" title="${esc(t('hint.card'))}" style="animation-delay:${Math.min(i, 16) * 22}ms">
     <div class="th">${thumb(p)}
-      <div class="badges"><span class="b">${icon('ue', 12)} ${esc(engLabel(p))}${isRunning(p) ? `<span class="live"></span>` : ''}</span>${p.favorite ? `<span class="b fav">${icon('starFill', 13)}</span>` : ''}</div>
-      <div class="ov"><button class="playbtn" data-act="launch" data-key="${k}">${icon('play', 14)} ${t('btn.launch')}</button><button class="ovbtn" data-act="menu" data-key="${k}">${icon('dotsH', 18)}</button></div>
+      <div class="badges"><span class="b">${ueIcon(13, e)} ${esc(engLabel(p))}${isRunning(p) ? `<span class="live"></span>` : ''}</span>${p.favorite ? `<span class="b fav">${icon('starFill', 13)}</span>` : ''}</div>
+      <div class="ov"><button class="playbtn" data-act="launch" data-key="${k}" title="${t('act.launch')}">${icon('play', 13)} ${t('btn.launch')}</button><button class="ovbtn" data-act="menu" data-key="${k}" title="${t('hint.more')}">${icon('dotsH', 16)}</button></div>
     </div>
     <div class="meta">
       <div class="nm">${p.color ? `<span class="cdot" style="background:${p.color}"></span>` : ''}${esc(pname(p))}</div>
@@ -233,18 +239,67 @@ function projectCard(p, i = 0) {
     </div></div>`;
 }
 function projectRow(p, i = 0) {
-  const k = esc(p.key);
-  return `<div class="row" data-act="open" data-key="${k}" data-dbl="launch" style="animation-delay:${Math.min(i, 16) * 18}ms">
+  const k = esc(p.key), e = engineOf(p);
+  return `<div class="row" data-act="open" data-key="${k}" data-dbl="launch" title="${esc(t('hint.card'))}" style="animation-delay:${Math.min(i, 16) * 18}ms">
     <span class="grip">${icon('grip', 16)}</span><div class="mini">${thumb(p, false)}</div>
     <div class="nm">${p.favorite ? `<span style="color:#e0a200;display:inline-block;vertical-align:-2px;margin-right:6px">${icon('starFill', 13)}</span>` : ''}${esc(pname(p))}<small>${esc(p.dir)}</small></div>
-    <span class="tile-chip">${icon('ue', 13)} ${esc(engLabel(p))}</span>
+    <span class="tile-chip">${ueIcon(14, e)} ${esc(engLabel(p))}</span>
     <span class="col">${p.isCpp ? 'C++' : 'Blueprint'}</span><span class="col">${ago(p.lastLaunched || p.modified)}</span>
-    <div class="acts"><button class="btn sm icon ghost" data-act="folder" data-key="${k}">${icon('folder', 16)}</button><button class="btn sm icon ghost" data-act="menu" data-key="${k}">${icon('dotsH', 16)}</button></div>
+    <div class="acts"><button class="btn sm icon ghost" data-act="folder" data-key="${k}" title="${t('act.folder')}">${icon('app:explorer', 16)}</button><button class="btn sm icon ghost" data-act="menu" data-key="${k}" title="${t('hint.more')}">${icon('dotsH', 16)}</button></div>
     <button class="btn sm pri" data-act="launch" data-key="${k}">${icon('play', 13)} ${t('btn.launch')}</button></div>`;
 }
 function emptyState() {
   return `<div class="empty"><div><div class="ill">${icon('ue', 40)}</div><b>${t('lib.empty')}</b>${t('lib.emptySub')}
     <div class="acts"><button class="btn" data-act="add">${icon('plus', 16)} ${t('btn.add')}</button><button class="btn pri" data-act="scan">${icon('scan', 16)} ${t('btn.scan')}</button></div></div></div>`;
+}
+
+// First steps: shown until the three basics have been done once (or dismissed).
+function guidePanel() {
+  if (localStorage.getItem('guideDone')) return '';
+  const steps = [
+    { done: S.projects.length > 0, act: 'scan', b: t('g.1'), s: t('g.1d') },
+    { done: !!localStorage.getItem('gOpened'), act: 'go', v: 'library', b: t('g.2'), s: t('g.2d') },
+    { done: S.history.length > 0, act: 'go', v: 'library', b: t('g.3'), s: t('g.3d') }
+  ];
+  if (steps.every((x) => x.done)) return '';
+  return `<div class="panel" style="padding:20px 24px"><h2>${icon('help', 18)} ${t('g.title')}<span class="sub">${t('g.sub')}</span><span style="flex:1"></span><button class="btn sm ghost" data-act="guideHide">${t('g.hide')}</button></h2>
+    <div class="guide">${steps.map((x, i) => `<button class="step ${x.done ? 'done' : ''}" data-act="${x.act}" ${x.v ? `data-v="${x.v}"` : ''}><span class="n">${x.done ? icon('check', 14) : i + 1}</span><span><b>${x.b}</b><small>${x.s}</small></span></button>`).join('')}</div></div>`;
+}
+
+// Fab "Limited-Time Free": the free assets that rotate every two weeks.
+function loadFab(force = false) {
+  S.fab.state = 'loading';
+  api.fabFree(force).then((r) => {
+    S.fab = { ...S.fab, state: r.ok ? 'ok' : 'error', data: r.ok ? r.data : S.fab.data };
+    if (S.view === 'home') renderView();
+  });
+}
+function fabLeft(end) {
+  const ms = end - Date.now();
+  if (ms <= 0) return t('fab.ended');
+  const d = Math.floor(ms / 86400000), h = Math.floor((ms % 86400000) / 3600000), m = Math.floor((ms % 3600000) / 60000);
+  return t('fab.left', { t: d ? `${d} d ${h} h` : h ? `${h} h ${m} min` : `${Math.max(1, m)} min` });
+}
+function fabCard(x, i) {
+  let price = '';
+  try { price = x.price ? new Intl.NumberFormat(locale(), { style: 'currency', currency: x.currency || 'USD' }).format(x.price) : ''; } catch {}
+  const type = { '3d-model': t('fab.t.model'), 'tool-and-plugin': t('fab.t.plugin'), material: t('fab.t.material'), 'environment': t('fab.t.env'), audio: 'Audio', animation: t('fab.t.anim') }[x.type] || words(x.type || '');
+  return `<button class="fabc" data-act="fabOpen" data-url="${esc(x.url)}" title="${esc(x.title)} — ${t('fab.claim')}" style="animation-delay:${i * 40}ms">
+    <div class="th">${x.image ? `<img src="${esc(x.image)}" alt="" loading="lazy" decoding="async" draggable="false"/>` : ''}<span class="free">${icon('gift', 12)} ${t('fab.free')}</span></div>
+    <div class="meta"><div class="nm">${esc(x.title)}</div>
+      <div class="sub">${price ? `<s>${esc(price)}</s><span class="sep"></span>` : ''}<span>${esc(type)}</span><span class="sep"></span><span class="by">${esc(x.seller)}</span></div></div></button>`;
+}
+function fabPanel() {
+  if (S.settings.fabFree === false) return '';
+  const f = S.fab, d = f.data;
+  if (f.state === 'idle') loadFab();
+  const head = `<h2>${icon('gift', 18)} ${t('fab.title')}${d ? `<span class="fabend" id="fabEnd">${icon('clock', 13)} ${fabLeft(d.end)}</span>` : ''}<span style="flex:1"></span>
+    <button class="btn sm ghost" data-act="fabOpen" data-url="https://www.fab.com/limited-time-free" title="${t('fab.allD')}">${t('fab.all')} ${icon('external', 12)}</button></h2>`;
+  let body;
+  if (d && d.items.length) body = `<div class="fab">${d.items.slice(0, 3).map(fabCard).join('')}</div>`;
+  else if (f.state === 'error') body = `<div class="hint" style="font-size:13px">${icon('globe', 15)} ${t('fab.offline')} <button class="btn sm" data-act="fabRetry">${icon('refresh', 13)} ${t('fab.retry')}</button></div>`;
+  else body = `<div class="fab">${'<div class="fabc"><div class="fabph"></div><div class="meta"><div class="nm">&nbsp;</div><div class="sub">&nbsp;</div></div></div>'.repeat(3)}</div>`;
+  return `<div class="panel">${head}${body}<div class="hint" style="margin:12px 2px 0">${icon('info', 13)} ${d && d.stale ? t('fab.stale') : t('fab.hint')}</div></div>`;
 }
 
 function viewHome() {
@@ -265,13 +320,14 @@ function viewHome() {
     const n = counts[dayKey(d)] || 0; total += n;
     cells.push(`<i class="${n === 0 ? '' : n === 1 ? 'l1' : n <= 3 ? 'l2' : n <= 6 ? 'l3' : 'l4'}" title="${d.toLocaleDateString(locale())}: ${t('cal.launches', { n })}"></i>`);
   }
-  const stat = (ic, v, l, s2) => `<div class="card stat"><div class="si">${icon(ic, 20)}</div><div><div class="v">${v}</div><div class="l">${l}</div>${s2 ? `<div class="s2">${s2}</div>` : ''}</div></div>`;
+  const stat = (ic, v, l, s2, go) => `<div class="card stat" ${go ? `data-act="go" data-v="${go}" style="cursor:pointer" title="${t('nav.' + go + '.d')}"` : ''}><div class="si">${icon(ic, 20)}</div><div><div class="v">${v}</div><div class="l">${l}</div>${s2 ? `<div class="s2">${s2}</div>` : ''}</div></div>`;
   return `<div class="home">
     <div class="panel hero"><div><h1>${greet}</h1><p>${t('home.sub')}</p></div>
-      <div style="display:flex;gap:8px"><button class="btn" data-act="add">${icon('plus', 16)} ${t('btn.add')}</button><button class="btn pri" data-act="scan">${icon('scan', 16)} ${S.scan.on ? t('btn.scanning') : t('btn.scan')}</button></div></div>
+      <div style="display:flex;gap:8px"><button class="btn" data-act="add" title="${t('hint.add')}">${icon('plus', 16)} ${t('btn.add')}</button><button class="btn pri" data-act="scan" title="${t('hint.scan')}">${icon('scan', 16)} ${S.scan.on ? t('btn.scanning') : t('btn.scan')}</button></div></div>
+    ${guidePanel()}
     <div class="stats">
-      ${stat('library', S.projects.length, t('stat.projects'), t('stat.cpp', { n: cpp, m: S.projects.length - cpp }))}
-      ${stat('cpu', S.engines.length, t('stat.engines'), S.engines[0] ? t('stat.latest', { v: S.engines[0].version }) : t('stat.none'))}
+      ${stat('library', S.projects.length, t('stat.projects'), t('stat.cpp', { n: cpp, m: S.projects.length - cpp }), 'library')}
+      ${stat('cpu', S.engines.length, t('stat.engines'), S.engines[0] ? t('stat.latest', { v: S.engines[0].version }) : t('stat.none'), 'engines')}
       ${stat('zap', week, t('stat.week'), streak ? t('stat.streak', { n: streak }) : '')}
       ${stat('clock', fmtDur(weekTime), t('stat.time'), t('stat.timeSub', { t: fmtDur(allTime) }))}
       ${stat('drive', disk ? fmtSize(disk) : '—', t('stat.disk'), `${t('stat.diskSub', { n: analyzed.length })} · <a style="color:var(--info);cursor:pointer" data-act="analyzeAll">${t('btn.analyzeAll')}</a>`)}
@@ -280,12 +336,13 @@ function viewHome() {
       <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
         <div class="panel"><h2>${t('home.jump')}<span style="flex:1"></span><button class="btn sm ghost" data-act="go" data-v="library">${t('home.viewAll')} ${icon('chevron', 14)}</button></h2>
           ${recent.length ? `<div class="jump">${recent.map(projectCard).join('')}</div>` : emptyState()}</div>
+        ${fabPanel()}
         <div class="panel"><h2>${t('home.activity')}<span class="sub">${t('home.activitySub', { n: total })}</span></h2><div class="heat">${cells.join('')}</div></div>
       </div>
       <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
         <div class="panel">${clockCard('margin-top:0')}${calendar()}</div>
-        <div class="panel"><h2>${t('home.enginesTitle')}</h2><div class="elist">${S.engines.slice(0, 4).map((e) => `
-          <div class="erow"><div class="grow"><span class="v">UE ${esc(e.version)}</span><small>${t('src.' + e.source)}</small></div><button class="btn sm" data-act="engLaunch" data-k="${esc(e.key)}">${icon('play', 12)}</button></div>`).join('') || `<div style="color:var(--muted);font-size:13px">${t('eng.empty')}</div>`}</div></div>
+        <div class="panel"><h2>${t('home.enginesTitle')}<span style="flex:1"></span><button class="btn sm ghost" data-act="go" data-v="engines">${t('home.viewAll')} ${icon('chevron', 12)}</button></h2><div class="elist">${S.engines.slice(0, 4).map((e) => `
+          <div class="erow">${ueIcon(28, e)}<div class="grow"><span class="v">UE ${esc(e.version)}</span><small>${t('src.' + e.source)}</small></div><button class="btn sm" data-act="engLaunch" data-k="${esc(e.key)}" title="${t('eng.open')}">${icon('play', 12)} ${t('eng.openShort')}</button></div>`).join('') || `<div style="color:var(--muted);font-size:13px">${t('eng.empty')}</div>`}</div></div>
         <div class="panel"><h2>${t('home.tips')}</h2><div class="tips">
           <div>${icon('keyboard', 15)}<span>${t('tip.1', { k: MOD() + ' K' })}</span></div><div>${icon('upload', 15)}<span>${t('tip.2')}</span></div>
           <div>${icon('dotsH', 15)}<span>${t('tip.3')}</span></div><div>${icon('shortcut', 15)}<span>${t('tip.4')}</span></div><div>${icon('history', 15)}<span>${t('tip.5')}</span></div></div>
@@ -314,8 +371,9 @@ function viewLibrary() {
     <div class="libbar">
       <label class="field">${icon('search', 18)}<input id="search" placeholder="${t('lib.search')}" value="${esc(S.search)}" spellcheck="false"/><kbd>${MOD()} F</kbd></label>
       <select class="sel" id="sort" style="width:190px;height:46px;border-radius:14px">${['activity', 'name', 'modified', 'created', 'launches', 'engine', 'size'].map((s) => `<option value="${s}" ${S.sort === s ? 'selected' : ''}>${t('sort.' + s)}</option>`).join('')}</select>
-      <div class="seg icons"><button class="${S.settings.viewMode !== 'list' ? 'on' : ''}" data-act="mode" data-m="grid">${icon('grid', 16)}</button><button class="${S.settings.viewMode === 'list' ? 'on' : ''}" data-act="mode" data-m="list">${icon('list', 16)}</button></div>
+      <div class="seg icons"><button class="${S.settings.viewMode !== 'list' ? 'on' : ''}" data-act="mode" data-m="grid" title="${t('hint.grid')}">${icon('grid', 16)}</button><button class="${S.settings.viewMode === 'list' ? 'on' : ''}" data-act="mode" data-m="list" title="${t('hint.list')}">${icon('list', 16)}</button></div>
     </div>
+    <div class="hint"><span>${icon('info', 13)} ${t('hint.click')}</span><span>${t('hint.dbl')}</span><span>${t('hint.right')}</span><span><kbd>${MOD()} K</kbd> ${t('hint.palette')}</span></div>
     <div class="scroll" id="libContent"></div>
   </section>`;
 }
@@ -340,33 +398,34 @@ function renderLibContent() {
 function viewProject() {
   const p = P(S.selected); if (!p) return '';
   const e = engineOf(p), k = esc(p.key);
-  const navs = [['folder', 'act.folder', 'folder'], ['ide', 'act.ide', 'code'], ['shortcut', 'act.shortcut', 'shortcut'], ['backup', 'act.backup', 'archive'], ['cleanTab', 'act.clean', 'broom'], ['terminal', 'act.terminal', 'terminal'], ['logs', 'act.logs', 'log']];
+  const navs = [['folder', 'act.folder', 'app:explorer'], ['ide', 'act.ide', 'app:ide'], ['shortcut', 'act.shortcut', 'shortcut'], ['backup', 'act.backup', 'archive'], ['cleanTab', 'act.clean', 'broom'], ['terminal', 'act.terminal', 'app:terminal'], ['logs', 'act.logs', 'log']];
   return `
   <aside class="panel side pside">
     <div class="heroimg">${thumb(p)}<button class="btn sm edit" data-act="thumb" data-key="${k}">${icon('image', 14)} ${t('act.thumb')}</button></div>
     <div class="pname">${p.color ? `<span style="width:10px;height:10px;border-radius:4px;background:${p.color}"></span>` : ''}<span style="flex:1">${esc(pname(p))}</span><button class="${p.favorite ? 'on' : ''}" data-act="fav" data-key="${k}">${icon(p.favorite ? 'starFill' : 'star', 20)}</button></div>
     <div class="pchips">
-      <span class="chip ${e ? '' : 'bad'}">${icon('ue', 12)} ${esc(engLabel(p))}${e ? '' : ' · ' + t('p.notInstalled')}</span>
-      <span class="chip">${p.isCpp ? icon('code', 12) + ' C++' : icon('sparkle', 12) + ' Blueprint'}</span>
+      <span class="chip ${e ? '' : 'bad'}">${ueIcon(14, e)} ${esc(engLabel(p))}${e ? '' : ' · ' + t('p.notInstalled')}</span>
+      <span class="chip">${p.isCpp ? icon('code', 12) + ' C++' : icon('blueprint', 12) + ' Blueprint'}</span>
       ${p.git ? `<span class="chip info">${icon('git', 12)} ${esc(p.git.branch)}</span>` : ''}
       ${isRunning(p) ? `<span class="chip good"><span class="live" style="margin:0"></span> ${t('p.running')}</span>` : ''}
     </div>
     <div class="launchrow">
       ${isRunning(p) ? `<button class="btn pri" data-act="stop" data-key="${k}" style="background:var(--bad);color:#fff">${icon('x', 15)} ${t('act.stop')}</button>` : `<button class="btn pri" data-act="launch" data-key="${k}">${icon('play', 15)} ${t('act.launch')}</button>`}
       <button class="btn icon" data-act="game" data-key="${k}" title="${t('act.game')}">${icon('gamepad', 19)}</button>
-      <button class="btn icon" data-act="menu" data-key="${k}">${icon('dotsH', 19)}</button>
+      <button class="btn icon" data-act="menu" data-key="${k}" title="${t('hint.more')}">${icon('dotsH', 19)}</button>
     </div>
     <div class="nlist" style="margin-top:10px">${navs.map(([a, l, ic]) => `<button class="nitem" data-act="${a}" data-key="${k}">${icon(ic, 19)}<span class="lbl">${t(l)}</span><span class="chev" style="opacity:1">${icon('chevron', 15)}</span></button>`).join('')}</div>
     ${clockCard()}
   </aside>
   <section class="panel main">
-    <div class="tabs">${[['overview', 'info'], ['gallery', 'image'], ['storage', 'drive'], ['build', 'hammer'], ['notes', 'note']].map(([x, ic]) => `<button class="${S.ptab === x ? 'on' : ''}" data-act="ptab" data-t="${x}">${icon(ic, 15)} ${t('tab.' + x)}</button>`).join('')}</div>
+    <div class="tabs">${[['overview', 'info'], ['plugins', 'layers'], ['gallery', 'image'], ['storage', 'drive'], ['build', 'hammer'], ['notes', 'note']].map(([x, ic]) => `<button class="${S.ptab === x ? 'on' : ''}" data-act="ptab" data-t="${x}">${icon(ic, 15)} ${t('tab.' + x)}</button>`).join('')}</div>
     <div class="scroll" id="ptab">${projectTab(p)}</div>
   </section>`;
 }
 function projectTab(p) {
   const k = esc(p.key);
   if (S.ptab === 'storage') return tabStorage(p);
+  if (S.ptab === 'plugins') return tabPlugins(p);
   if (S.ptab === 'gallery') {
     const g = S.gallery[p.key];
     if (!g) return `<div class="empty"><div><div class="ill"><span class="spinner" style="width:26px;height:26px;border-width:3px"></span></div></div></div>`;
@@ -379,9 +438,9 @@ function projectTab(p) {
       ${card('generate', 'fileCode', 'act.generate', t('b.generate.d'), !p.isCpp)}${card('build', 'hammer', 'act.build', t('b.build.d'), !p.isCpp)}
       ${card('package', 'box', 'act.package', t('b.package.d'))}${card('backup', 'archive', 'act.backup', t('b.backup.d'))}
       ${card('duplicate', 'duplicate', 'act.duplicate', t('b.duplicate.d'))}${card('switch', 'cpu', 'act.switch', t('m.switchD'))}
-      ${card('redirectors', 'refresh', 'act.redirectors', t('b.redirectors.d'))}${card('blueprints', 'sparkle', 'act.blueprints', t('b.blueprints.d'))}
+      ${card('redirectors', 'refresh', 'act.redirectors', t('b.redirectors.d'))}${card('blueprints', 'blueprint', 'act.blueprints', t('b.blueprints.d'))}
       ${card('shortcut', 'shortcut', 'act.shortcut', t('tip.4'))}${card('shortcutGame', 'gamepad', 'act.shortcutGame', t('act.game'))}
-      ${card('terminal', 'terminal', 'act.terminal', t('b.terminal.d'))}${card('logs', 'log', 'act.logs', '')}</div>`;
+      ${card('terminal', 'app:terminal', 'act.terminal', t('b.terminal.d'))}${card('logs', 'log', 'act.logs', '')}</div>`;
   }
   if (S.ptab === 'notes') {
     return `<div class="block" style="margin-top:0"><h4>${icon('tag', 14)} ${t('notes.tags')}</h4>
@@ -400,7 +459,7 @@ function projectTab(p) {
       ${kv('image', t('ov.content'), d ? fmtSize(d.content) : '…')}${kv('layers', t('ov.maps'), d ? d.maps : '…')}${kv('box', t('ov.assets'), d ? d.assets.toLocaleString(locale()) : '…')}
     </div>
     <div class="block"><h4>${icon('folder', 14)} ${t('p.path')}</h4>
-      <div class="pathbox"><span title="${esc(p.file)}">${esc(p.file)}</span><button class="btn sm icon ghost" data-act="copyPath" data-key="${k}">${icon('copy', 15)}</button><button class="btn sm icon ghost" data-act="folder" data-key="${k}">${icon('external', 15)}</button></div></div>
+      <div class="pathbox"><span title="${esc(p.file)}">${esc(p.file)}</span><button class="btn sm icon ghost" data-act="copyPath" data-key="${k}" title="${t('act.copyPath')}">${icon('copy', 15)}</button><button class="btn sm icon ghost" data-act="folder" data-key="${k}" title="${t('act.folder')}">${icon('app:explorer', 16)}</button></div></div>
     ${p.description ? `<div class="block"><h4>${t('ov.description')}</h4><div style="color:var(--text-2)">${esc(p.description)}</div></div>` : ''}
     <div class="block"><h4>${icon('settings', 14)} ${t('set.title')}</h4>
       <div class="formgrid">
@@ -414,6 +473,72 @@ function projectTab(p) {
     ${p.modules.length ? `<div class="block"><h4>${icon('code', 14)} ${t('ov.modules')}</h4><div class="chips">${p.modules.map((m) => `<span class="chip">${esc(m.name)} <span style="opacity:.6">${esc(m.type)}</span></span>`).join('')}</div></div>` : ''}
     <div class="block"><h4>${icon('monitor', 14)} ${t('ov.platforms')}</h4><div class="chips">${(p.targetPlatforms.length ? p.targetPlatforms : [t('ov.all')]).map((x) => `<span class="chip">${esc(x)}</span>`).join('')}</div></div>`;
 }
+const PLG_FILTERS = {
+  project: (x) => x.explicit || x.source === 'project',
+  enabled: (x) => x.enabled,
+  all: () => true,
+  issues: (x) => x.issues.length > 0
+};
+function tabPlugins(p) {
+  const d = S.plugins[p.key];
+  if (!d) return `<div class="empty"><div><div class="ill"><span class="spinner" style="width:26px;height:26px;border-width:3px"></span></div><b>${t('pl.loading')}</b></div></div>`;
+  const nIssues = d.plugins.filter(PLG_FILTERS.issues).length;
+  return `<div class="libbar">
+      <label class="field">${icon('search', 18)}<input id="plgSearch" placeholder="${t('pl.search')}" value="${esc(S.plgSearch)}" spellcheck="false"/></label>
+      <div class="seg">${Object.keys(PLG_FILTERS).map((f) => `<button class="${S.plgFilter === f ? 'on' : ''}" data-act="plgFilter" data-f="${f}">${f === 'issues' && nIssues ? icon('alert', 13) : ''}${t('pl.f.' + f)} <span style="opacity:.55">${d.plugins.filter(PLG_FILTERS[f]).length}</span></button>`).join('')}</div>
+      <button class="btn sm icon ghost" data-act="plgReload" title="${t('pl.reload')}">${icon('refresh', 16)}</button>
+    </div>
+    <div class="hint"><span>${icon('info', 13)} ${t('pl.hint')}</span></div>
+    ${d.engineMissing ? `<div class="hint" style="color:var(--warn)"><span>${icon('alert', 13)} ${t('pl.noEngine')}</span></div>` : ''}
+    ${isRunning(p) ? `<div class="hint" style="color:var(--warn)"><span>${icon('alert', 13)} ${t('pl.running')}</span></div>` : ''}
+    <div class="tlist" id="plgList">${pluginRows(p)}</div>`;
+}
+function pluginRows(p) {
+  const d = S.plugins[p.key], q = S.plgSearch.trim().toLowerCase();
+  const list = d.plugins.filter(PLG_FILTERS[S.plgFilter] || PLG_FILTERS.all)
+    .filter((x) => !q || [x.name, x.friendly, x.category, x.desc].join(' ').toLowerCase().includes(q));
+  if (!list.length) return `<div class="empty"><div><div class="ill">${icon('layers', 34)}</div><b>${t(q ? 'lib.noMatch' : 'pl.empty')}</b></div></div>`;
+  const src = { project: ['info', 'pl.s.project'], engine: ['', 'pl.s.engine'], fab: ['good', 'pl.s.fab'], missing: ['bad', 'pl.s.missing'] };
+  const issue = (s) => s === 'missing' ? `<span class="chip bad">${icon('alert', 11)} ${t('pl.i.missing')}</span>`
+    : s.startsWith('version:') ? `<span class="chip warn">${icon('alert', 11)} ${t('pl.i.version', { v: esc(s.slice(8)), e: esc(d.engine.split('.').slice(0, 2).join('.')) })}</span>`
+    : `<span class="chip bad">${icon('alert', 11)} ${t('pl.i.dep', { n: esc(s.slice(4)) })}</span>`;
+  const MAX = 250;
+  return list.slice(0, MAX).map((x) => {
+    const [cls, label] = src[x.source] || src.engine;
+    return `<div class="citem plg"><span class="grow">
+      <span class="ptop"><b>${esc(x.friendly || words(x.name))}</b>
+        <span class="chip ${cls}">${t(label)}</span>${x.version ? `<span class="chip">${esc(x.version)}</span>` : ''}${x.category ? `<span class="chip">${esc(x.category)}</span>` : ''}
+        ${x.beta || x.experimental ? `<span class="chip warn">${t(x.beta ? 'pl.beta' : 'pl.experimental')}</span>` : ''}${x.issues.map(issue).join('')}</span>
+      <small title="${esc(x.desc)}">${esc(x.desc || x.name)}</small></span>
+      <button class="toggle ${x.enabled ? 'on' : ''}" data-act="plgTog" data-name="${esc(x.name)}" title="${t(x.enabled ? 'pl.disable' : 'pl.enable')}"></button></div>`;
+  }).join('') + (list.length > MAX ? `<div class="hint" style="justify-content:center;margin-top:8px">${t('pl.more', { n: list.length - MAX })}</div>` : '');
+}
+function loadPlugins(p, force = false) {
+  S.plugins[p.key] = null;
+  if (force && S.view === 'project' && S.selected === p.key) rerenderTab(p);
+  api.plugins(p.key, force).then((r) => {
+    if (!r.ok) { delete S.plugins[p.key]; showError(r.error); return; }
+    S.plugins[p.key] = r.data;
+    if (S.view === 'project' && S.selected === p.key && S.ptab === 'plugins') rerenderTab(p);
+  });
+}
+
+function updateRow() {
+  const u = S.update || {}, s = u.state;
+  const check = `<button class="btn sm" data-act="updCheck">${icon('refresh', 14)} ${t('up.check')}</button>`;
+  const notes = u.page ? `<button class="btn sm ghost" data-act="updNotes">${t('up.notes')} ${icon('external', 12)}</button>` : '';
+  let desc, ctrl = check;
+  if (s === 'checking') { desc = t('up.checking'); ctrl = '<span class="spinner"></span>'; }
+  else if (s === 'available') { desc = t('up.available', { v: esc(u.version) }) + (u.size ? ' · ' + fmtSize(u.size) : '') + (u.error ? ` · <span style="color:var(--bad)">${esc(u.error)}</span>` : ''); ctrl = `${notes}<button class="btn sm pri" data-act="updDownload">${icon('download', 14)} ${t('up.download')}</button>`; }
+  else if (s === 'downloading') { desc = t('up.downloading', { v: esc(u.version), p: u.pct || 0 }); ctrl = `<div class="storbar" style="width:180px;margin:0"><i style="width:${u.pct || 0}%;background:var(--ink)"></i></div>`; }
+  else if (s === 'ready') { desc = t('up.ready', { v: esc(u.version) }) + (u.verified ? ' · ' + t('up.verified') : ''); ctrl = `${notes}<button class="btn sm pri" data-act="updInstall">${icon('play', 13)} ${t('up.install')}</button>`; }
+  else if (s === 'error') desc = `<span style="color:var(--bad)">${t('up.error')}</span> ${esc(u.error || '')}`;
+  else if (s === 'none') desc = t('up.none', { v: esc(S.version) });
+  else desc = u.checked ? t('up.last', { t: ago(u.checked).toLowerCase() }) : t('up.never');
+  return `<div class="grow"><b>${t('up.title')}</b><small>${desc}</small></div><div style="display:flex;gap:6px;align-items:center">${ctrl}</div>`;
+}
+function paintUpdate() { const el = $('#updRow'); if (el) el.innerHTML = updateRow(); renderRail(); }
+
 function tabStorage(p) {
   const a = S.analysis[p.key], k = esc(p.key);
   if (!a) return `<div class="empty"><div><div class="ill">${icon('drive', 36)}</div><b>${t('act.clean')}</b>${t('st.hint')}<div class="acts"><button class="btn pri" data-act="analyze" data-key="${k}">${icon('scan', 16)} ${t('btn.analyze')}</button></div></div></div>`;
@@ -445,14 +570,14 @@ function viewEngines() {
       <button class="btn sm pri" data-act="engAdd">${icon('folderPlus', 15)} ${t('eng.add')}</button></h2>
     <div class="scroll">${S.engines.length ? `<div class="egrid">${S.engines.map((e, i) => `
       <div class="card ecard" style="animation-delay:${i * 40}ms">
-        <div class="top2"><div class="badge">${icon('ue', 30)}</div><div style="flex:1;min-width:0"><div class="ver">Unreal Engine ${esc(e.version)}</div><span class="chip ${e.source === 'source' ? 'warn' : e.source === 'manual' ? 'info' : 'good'}">${t('src.' + e.source)}</span></div></div>
+        <div class="top2"><div class="badge ${!e.logo && e.icon ? 'real' : ''}">${ueIcon(e.logo || !e.icon ? 32 : 40, e)}</div><div style="flex:1;min-width:0"><div class="ver">Unreal Engine ${esc(e.version)}</div><span class="chip ${e.source === 'source' ? 'warn' : e.source === 'manual' ? 'info' : 'good'}">${t('src.' + e.source)}</span></div></div>
         <div class="pathbox"><span title="${esc(e.root)}">${esc(e.root)}</span></div>
         <div class="stats2"><span>${t('eng.used', { n: `<b>${used(e)}</b>` })}</span><span><b>${e.size ? fmtSize(e.size) : '—'}</b></span></div>
         <div class="acts">
-          <button class="btn sm pri" data-act="engLaunch" data-k="${esc(e.key)}">${icon('play', 13)} ${t('eng.open')}</button>
-          <button class="btn sm" data-act="engFolder" data-k="${esc(e.key)}" data-root="${esc(e.root)}">${icon('folder', 15)}</button>
+          <button class="btn sm pri" data-act="engLaunch" data-k="${esc(e.key)}" title="${t('eng.openD')}">${icon('play', 13)} ${t('eng.open')}</button>
+          <button class="btn sm" data-act="engFolder" data-k="${esc(e.key)}" data-root="${esc(e.root)}" title="${t('act.folder')}">${icon('app:explorer', 16)}</button>
           <button class="btn sm" data-act="engSize" data-k="${esc(e.key)}">${icon('drive', 15)} ${t('eng.size')}</button>
-          ${e.source === 'manual' ? `<button class="btn sm danger" data-act="engRemove" data-k="${esc(e.key)}">${icon('trash', 15)}</button>` : ''}
+          ${e.source === 'manual' ? `<button class="btn sm danger" data-act="engRemove" data-k="${esc(e.key)}" title="${t('btn.remove')}">${icon('trash', 15)}</button>` : ''}
         </div></div>`).join('')}</div>`
       : `<div class="empty"><div><div class="ill">${icon('cpu', 36)}</div><b>${t('eng.empty')}</b>${t('eng.emptySub')}<div class="acts"><button class="btn" data-act="epic">${t('eng.epic')}</button><button class="btn pri" data-act="engAdd">${t('eng.add')}</button></div></div></div>`}</div></section>`;
 }
@@ -495,6 +620,8 @@ function viewSettings() {
       ${row(t('set.startMin'), t('set.startMin.d'), tog('startMinimized'))}
       ${row(t('set.tray'), t('set.tray.d'), tog('closeToTray'))}
       ${row(t('set.notify'), t('set.notify.d'), tog('notifications'))}
+      ${row(t('set.fab'), t('set.fab.d'), tog('fabFree'))}
+      ${row(t('set.autoUpdate'), t('set.autoUpdate.d'), tog('autoUpdate'))}
     </div>
     <h3 id="sec-appearance">${t('set.appearance')}</h3>
     <div class="card sgroup">
@@ -527,7 +654,8 @@ function viewSettings() {
     </div>
     <h3 id="sec-about">${t('set.about')}</h3>
     <div class="card sgroup">
-      <div class="srow"><div style="width:52px;height:52px;border-radius:16px;background:var(--ink);color:var(--ink-t);display:grid;place-items:center">${icon('ue', 30)}</div><div class="grow"><b>Unreal Hub ${esc(S.version)}</b><small>${t('set.about.d')}</small></div></div>
+      <div class="srow"><div style="width:52px;height:52px;border-radius:16px;background:var(--ink);color:var(--ink-t);display:grid;place-items:center">${hubLogo(32)}</div><div class="grow"><b>Unreal Hub ${esc(S.version)}</b><small>${t('set.about.d')}</small></div></div>
+      <div class="srow" id="updRow">${updateRow()}</div>
       <div class="credits">
         <div><small>${t('cred.by')}</small><b>jsTici & Zorac</b></div>
         <div><small>${t('cred.version')}</small><b>${esc(S.version)}</b></div>
@@ -573,12 +701,17 @@ function bindProject() {
     S.details[p.key] = null;
     api.details(p.key).then((r) => { if (r.ok) { S.details[p.key] = r.data; if (S.view === 'project' && S.selected === p.key && S.ptab === 'overview') rerenderTab(p); } });
   }
+  if (S.ptab === 'plugins') {
+    if (S.plugins[p.key] === undefined) loadPlugins(p);
+    const ps = $('#plgSearch');
+    if (ps) ps.oninput = () => { S.plgSearch = ps.value; $('#plgList').innerHTML = pluginRows(p); };
+  }
   if (S.ptab === 'gallery' && S.gallery[p.key] === undefined) {
     S.gallery[p.key] = null;
     api.screenshots(p.key).then((r) => { S.gallery[p.key] = r.ok ? r.data : []; if (S.view === 'project' && S.selected === p.key && S.ptab === 'gallery') rerenderTab(p); });
   }
   const eng = $('#pEngine');
-  if (eng) eng.onchange = async () => { await call('setMeta', p.key, { engineKey: eng.value }); p.engineKey = eng.value; render(); };
+  if (eng) eng.onchange = async () => { await call('setMeta', p.key, { engineKey: eng.value }); p.engineKey = eng.value; delete S.plugins[p.key]; render(); };
   const args = $('#pArgs');
   if (args) args.onchange = () => { p.args = args.value; call('setMeta', p.key, { args: p.args }); };
   const alias = $('#pAlias');
@@ -619,7 +752,8 @@ function engineOptions(p) {
 
 let palIdx = 0, palItems = [];
 function openPalette() {
-  $('#palette').innerHTML = `<div class="pin">${icon('search', 19)}<input id="palIn" placeholder="${t('pal.placeholder')}" spellcheck="false"/><kbd>Esc</kbd></div><div class="res" id="palRes"></div>`;
+  $('#palette').innerHTML = `<div class="pin">${icon('search', 19)}<input id="palIn" placeholder="${t('pal.placeholder')}" spellcheck="false"/><kbd>Esc</kbd></div><div class="res" id="palRes"></div>
+    <div class="hint" style="padding:10px 18px;margin:0;border-top:1px solid var(--line)"><span><kbd>↑</kbd><kbd>↓</kbd> ${t('pal.move')}</span><span><kbd>↵</kbd> ${t('pal.launch')}</span><span><kbd>Shift</kbd><kbd>↵</kbd> ${t('pal.details')}</span></div>`;
   $('#palette').classList.add('on'); $('#veil').classList.add('on');
   const inp = $('#palIn');
   inp.oninput = () => { palIdx = 0; renderPalette(inp.value); };
@@ -640,7 +774,11 @@ function renderPalette(q) {
     { i: 'scan', l: t('cmd.scan'), run: () => A.scan() },
     { i: 'plus', l: t('cmd.add'), run: () => A.add() },
     { i: 'folderPlus', l: t('cmd.addEngine'), run: () => A.engAdd() },
-    ...['home', 'library', 'engines', 'tasks', 'settings'].map((v) => ({ i: 'chevron', l: t('cmd.go', { v: t('nav.' + v) }), run: () => setView(v) }))
+    { i: 'newProject', l: t('btn.newProject'), run: () => A.newProject() },
+    { i: 'download', l: t('up.check'), run: () => { setView('settings'); setTimeout(() => { A.secGo({ dataset: { s: 'about' } }); A.updCheck(); }, 50); } },
+    { i: 'gift', l: t('cmd.fab'), run: () => call('openExternal', 'https://www.fab.com/limited-time-free') },
+    ...[['home', 'home'], ['library', 'library'], ['engines', 'cpu'], ['tasks', 'terminal'], ['settings', 'settings']].map(([v, ic]) => ({ i: ic, l: t('cmd.go', { v: t('nav.' + v) }), run: () => setView(v) })),
+    ...['general', 'appearance', 'scanning', 'launch', 'data', 'about'].map((s) => ({ i: 'settings', l: `${t('nav.settings')} › ${t('set.' + s)}`, run: () => { setView('settings'); setTimeout(() => A.secGo({ dataset: { s } }), 50); } }))
   ].filter((c) => !q || c.l.toLowerCase().includes(q));
   const projs = sorted(S.projects).filter((p) => !q || [p.name, p.alias, ...p.tags].join(' ').toLowerCase().includes(q)).slice(0, q ? 8 : 5)
     .map((p) => ({ p, run: (shift) => (shift ? setView('project', { key: p.key }) : launch(p.key)) }));
@@ -675,8 +813,9 @@ function projectMenu(p, x, y) {
     { i: 'pin', l: t(p.pinned ? 'act.unpin' : 'act.pin'), fn: () => A.pin(o) },
     { i: 'info', l: t('act.details'), fn: () => A.open(o) },
     '-',
-    { i: 'folder', l: t('act.folder'), fn: () => call('showItem', p.file) },
-    { i: 'code', l: t('act.ide'), fn: () => A.ide(o) },
+    { i: 'app:explorer', l: t('act.folder'), fn: () => call('showItem', p.file) },
+    { i: 'app:ide', l: t('act.ide'), fn: () => A.ide(o) },
+    { i: 'app:terminal', l: t('act.terminal'), fn: () => A.terminal(o) },
     { i: 'shortcut', l: t('act.shortcut'), fn: () => A.shortcut(o) },
     { i: 'image', l: t('act.thumb'), fn: () => A.thumb(o) },
     ...(p.customThumb ? [{ i: 'refresh', l: t('act.thumbReset'), fn: () => A.thumbReset(o) }] : []),
@@ -707,7 +846,10 @@ const runTask = async (fn, ...a) => { const id = await call(fn, ...a); if (id) {
 const A = {
   go: (el) => setView(el.dataset.v),
   back: () => setView(S.back || 'library'),
-  open: (el) => { S.ptab = 'overview'; setView('project', { key: el.dataset.key }); },
+  open: (el) => { S.ptab = 'overview'; S.plgSearch = ''; localStorage.setItem('gOpened', '1'); setView('project', { key: el.dataset.key }); },
+  guideHide: () => { localStorage.setItem('guideDone', '1'); render(); },
+  fabOpen: (el) => call('openExternal', el.dataset.url),
+  fabRetry: () => { loadFab(true); render(); },
   launch: (el) => launch(kOf(el)),
   game: (el) => launch(kOf(el), { mode: 'game' }),
   menu: (el) => { const r = el.getBoundingClientRect(); projectMenu(P(kOf(el)), r.left, r.bottom + 6); },
@@ -776,7 +918,7 @@ const A = {
     openModal(`<h3>${icon('cpu', 18)} ${t('m.switchTitle')}</h3><p class="d">${t('m.switchD')}</p><div class="mbody"><select class="sel" id="mEng">${engineOptions(p)}</select></div>
       <div class="mfoot"><button class="btn ghost" id="mNo">${t('btn.cancel')}</button><button class="btn pri" id="mOk">${t('btn.save')}</button></div>`, (m) => {
       $('#mNo', m).onclick = closeModal;
-      $('#mOk', m).onclick = async () => { const r = await call('setEngine', p.key, $('#mEng', m).value); closeModal(); if (r) { p.association = r.association; p.engineKey = ''; render(); } };
+      $('#mOk', m).onclick = async () => { const r = await call('setEngine', p.key, $('#mEng', m).value); closeModal(); if (r) { p.association = r.association; p.engineKey = ''; delete S.plugins[p.key]; render(); } };
     });
   },
   hide: async (el) => {
@@ -791,6 +933,37 @@ const A = {
   },
   cleanTab: (el) => { const k = kOf(el); S.ptab = 'storage'; if (S.view !== 'project') setView('project', { key: k }); else render(); if (!S.analysis[k]) A.analyze({ dataset: { key: k } }); },
   ptab: (el) => { S.ptab = el.dataset.t; render(); },
+  plgFilter: (el) => { S.plgFilter = el.dataset.f; rerenderTab(P(S.selected)); },
+  plgReload: () => loadPlugins(P(S.selected), true),
+  plgTog: async (el) => {
+    const p = P(S.selected), d = S.plugins[p.key];
+    const pl = d && d.plugins.find((x) => x.name === el.dataset.name);
+    if (!pl) return;
+    const on = !pl.enabled, label = pl.friendly || words(pl.name);
+    if (!on) {
+      const users = d.plugins.filter((x) => x.enabled && x !== pl && x.deps.some((n) => n.toLowerCase() === pl.name.toLowerCase()));
+      if (users.length && !(await confirmBox(t('pl.depTitle'), t('pl.depD', { n: `<b>${esc(label)}</b>`, l: users.map((x) => esc(x.friendly || x.name)).join(', ') }), t('pl.disable'), true))) return;
+    }
+    el.disabled = true;
+    const r = await call('setPlugin', p.key, pl.name, on);
+    if (!r) { el.disabled = false; return; }
+    S.plugins[p.key] = r; p.plugins = r.names;
+    const top = $('#ptab').scrollTop;
+    rerenderTab(p); $('#ptab').scrollTop = top;
+    toast(t(on ? 'pl.enabledT' : 'pl.disabledT', { n: label }), t(isRunning(p) ? 'pl.restart' : 'pl.next'), 'ok');
+  },
+  updCheck: async () => {
+    S.update = { ...S.update, state: 'checking' }; paintUpdate();
+    const u = await call('checkUpdate');
+    if (u) { S.update = u; paintUpdate(); if (u.state === 'none') toast(t('up.none', { v: S.version }), '', 'ok'); }
+  },
+  updDownload: () => call('downloadUpdate'),
+  updNotes: () => call('openExternal', S.update.page),
+  updInstall: async () => {
+    const busy = S.tasks.filter((x) => x.status === 'running').length;
+    if (!(await confirmBox(t('up.installTitle', { v: esc(S.update.version) }), t(busy ? 'up.installBusy' : 'up.installD', { n: busy }), t('up.install'), !!busy))) return;
+    await call('installUpdate');
+  },
   analyze: async (el) => {
     const k = kOf(el);
     S.analysis[k] = { loading: true }; if (S.view === 'project') render();
@@ -919,11 +1092,22 @@ window.addEventListener('drop', async (e) => {
   if (r) { applyData(r); toast(t('t.added', { n: r.added }), '', 'ok'); }
 });
 
-// live clock
+// live clock + Fab countdown (nothing runs while the window is minimized or hidden)
+let tick = 0;
 setInterval(() => {
-  const f = $('#clockFace'); if (!f) return;
-  const d = new Date(); f.innerHTML = clockSvg(d);
-  const ct = clockText(d); $('#clockTm').textContent = ct.tm; $('#clockDt').textContent = ct.dt;
+  if (document.hidden) return;
+  tick++;
+  const f = $('#clockFace');
+  if (f) {
+    const d = new Date(); f.innerHTML = clockSvg(d);
+    const ct = clockText(d); $('#clockTm').textContent = ct.tm; $('#clockDt').textContent = ct.dt;
+  }
+  const fd = S.fab.data;
+  if (tick % 30 === 0 && fd) {
+    const el = $('#fabEnd'); if (el) el.innerHTML = `${icon('clock', 13)} ${fabLeft(fd.end)}`;
+    // the giveaway rotated: fetch the new assets (at most every 15 min until Fab publishes them)
+    if (Date.now() > fd.end && S.fab.state !== 'loading' && Date.now() - S.fab.tried > 15 * 60000) { S.fab.tried = Date.now(); loadFab(true); }
+  }
 }, 1000);
 
 api.onScan((m) => {
@@ -938,7 +1122,7 @@ api.onScan((m) => {
 });
 api.onProjects((d) => {
   if (d.projects) S.projects = d.projects;
-  if (d.engines) S.engines = d.engines;
+  if (d.engines) { S.engines = d.engines; syncUeIcon(); }
   if (d.lastScan) S.lastScan = d.lastScan;
   if (S.view !== 'settings' && !(S.view === 'project' && S.ptab === 'notes')) renderView();
   renderTop();
@@ -964,6 +1148,13 @@ api.onRunning((m) => {
   if (wasRunning && !S.running.includes(m.key) && P(m.key)) toast(t('t.stopped'), pname(P(m.key)));
   if (!(S.view === 'project' && S.ptab === 'notes') && S.view !== 'settings') renderView();
 });
+api.onUpdate((m) => {
+  const prev = S.update.state;
+  S.update = m;
+  if (m.state === 'available' && prev !== 'available' && prev !== 'downloading') toast(t('up.available', { v: m.version }), t('up.availableSub'), 'ok');
+  if (m.state === 'ready' && prev === 'downloading') toast(t('up.ready', { v: m.version }), t('up.readySub'), 'ok');
+  paintUpdate();
+});
 api.onWindow((m) => { S.maximized = m.maximized; renderTop(); });
 
 
@@ -973,4 +1164,6 @@ api.onWindow((m) => { S.maximized = m.maximized; renderTop(); });
   const tk = await call('tasks'); if (tk) S.tasks = tk;
   S.view = 'home';
   applyData(d);
+  const si = await api.sysIcons();
+  if (si.ok && si.data) { Object.assign(APP_ICONS, si.data); render(); }
 })();

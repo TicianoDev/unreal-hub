@@ -16,14 +16,14 @@ Find all your projects in seconds, open them with one click, keep your engines t
 
 [![Download](https://img.shields.io/badge/⬇_Download-Windows_Setup-2f62d6?style=for-the-badge)](https://github.com/TicianoDev/unreal-hub/releases/latest)
 &nbsp;
-[![Version](https://img.shields.io/badge/version-2.1.0-6a4fd6?style=for-the-badge)](https://github.com/TicianoDev/unreal-hub/releases)
+[![Version](https://img.shields.io/badge/version-2.2.0-6a4fd6?style=for-the-badge)](https://github.com/TicianoDev/unreal-hub/releases)
 &nbsp;
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e?style=for-the-badge)](LICENSE)
 
 ![Windows](https://img.shields.io/badge/Windows_10_|_11-0078D6?style=flat-square&logo=windows&logoColor=white)
-![Electron](https://img.shields.io/badge/Electron_33-47848F?style=flat-square&logo=electron&logoColor=white)
+![Electron](https://img.shields.io/badge/Electron_44-47848F?style=flat-square&logo=electron&logoColor=white)
 ![Unreal Engine](https://img.shields.io/badge/Unreal_Engine_4.27_→_5.x-0E1128?style=flat-square&logo=unrealengine&logoColor=white)
-![Offline](https://img.shields.io/badge/100%25_offline-no_telemetry-1b1f3b?style=flat-square)
+![Private](https://img.shields.io/badge/no_accounts-no_telemetry-1b1f3b?style=flat-square)
 
 [Features](#-features) · [Screenshots](#-screenshots) · [Install](#-install) · [Build from source](#-build-from-source) · [Credits](#-credits)
 
@@ -58,6 +58,7 @@ Find all your projects in seconds, open them with one click, keep your engines t
 <td valign="top">
 
 ### Project tools
+- **Plugin manager**: enable / disable project, engine and Fab plugins without opening the editor, with warnings for missing or version-mismatched ones
 - Generate project files, compile C++, package (BuildCookRun)
 - Fix up redirectors & compile all Blueprints
 - Zip backup, duplicate, switch engine version
@@ -68,6 +69,7 @@ Find all your projects in seconds, open them with one click, keep your engines t
 
 ### Made to feel good
 - Soft-glass dashboard with clock, calendar & activity heatmap
+- **Free on Fab**: the limited-time free assets with a countdown, one click to claim
 - Light / dark / system theme and 7 accent colors
 - **English** (default) and **Español**
 - Command palette <kbd>Ctrl</kbd> + <kbd>K</kbd>, drag & drop, keyboard shortcuts
@@ -85,7 +87,7 @@ Find all your projects in seconds, open them with one click, keep your engines t
 <td valign="top">
 
 ###  Trustworthy
-- Works 100% offline — no accounts, no telemetry
+- No accounts, no telemetry — the only network requests are the optional **Free on Fab** panel and the update check on GitHub (both can be turned off in Settings)
 - Per-user install, **no admin rights**
 - Clean uninstaller — your projects are never touched
 
@@ -129,9 +131,11 @@ Find all your projects in seconds, open them with one click, keep your engines t
 
 ## 📦 Install
 
-1. Download **`UnrealHub-Setup-2.1.0.exe`** from [**Releases**](https://github.com/TicianoDev/unreal-hub/releases/latest).
-2. Run it, choose your language and the options you want (desktop shortcut, Start menu, start with Windows).
+1. Download **`UnrealHub-Setup-2.2.0.msi`** from [**Releases**](https://github.com/TicianoDev/unreal-hub/releases/latest).
+2. Run it — it installs for your user only (no admin rights) and creates desktop and Start menu shortcuts.
 3. Done — Unreal Hub scans your drives and shows all your projects.
+
+**Updates:** from 2.2.0 on, Unreal Hub checks GitHub Releases by itself and tells you when a new version is out. Download and install it from **Settings › About**; the SHA-256 checksum is verified before installing.
 
 > [!NOTE]
 > The installer is not code-signed yet, so Windows SmartScreen may show *"Windows protected your PC"*. Click **More info → Run anyway**. You can verify the file with the SHA-256 checksum published in each release.
@@ -143,20 +147,21 @@ Find all your projects in seconds, open them with one click, keep your engines t
 ## Build from source
 
 ```bash
-git clone https://github.com/jsTici/unreal-hub.git
+git clone https://github.com/TicianoDev/unreal-hub.git
 cd unreal-hub
 npm install
 npm start            # run in development
 ```
 
-**Windows build + installer**
+**Windows installer**
 
 ```powershell
-npx electron-builder --win --dir                                    # -> dist\win-unpacked
-& "C:\Program Files (x86)\NSIS\makensis.exe" build\installer.nsi   # -> dist\UnrealHub-Setup-2.1.0.exe
+npm run dist         # -> dist/UnrealHub-Setup-<version>.msi
 ```
 
-Requires [Node.js 18+](https://nodejs.org) and [NSIS 3](https://nsis.sourceforge.io).
+Requires [Node.js 18+](https://nodejs.org). electron-builder downloads WiX by itself.
+
+**Publishing a release** (installed copies update from it): bump `version` in `package.json`, run `npm run dist`, then create a GitHub release tagged with that version (e.g. `2.2.0`) and attach the `.msi` plus a `SHA256SUMS.txt`. Keep the MSI `upgradeCode` unchanged so each version replaces the previous one.
 
 <details>
 <summary><b>Project structure</b></summary>
@@ -167,9 +172,6 @@ src/
 ├─ preload.js         Safe bridge between UI and system
 ├─ assets/            App icon & logo
 └─ renderer/          UI — index.html, styles.css, app.js, i18n.js (EN/ES), icons.js
-build/
-├─ installer.nsi      Custom NSIS installer (EN/ES, per-user, clean uninstall)
-└─ license.txt        License shown in the setup
 ```
 
 </details>
@@ -195,7 +197,7 @@ build/
 
 Designed & programmed by **jsTici** and **Zorac**.
 
-Icons in the style of [Lucide](https://lucide.dev) (MIT)
+Icons: Windows Segoe Fluent Icons and the real icons of your installed programs
 
 *Unreal® and Unreal Engine® are trademarks of Epic Games, Inc. This project is not affiliated with or endorsed by Epic Games.*
 
