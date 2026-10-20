@@ -9,6 +9,7 @@ const S = {
   tasks: [], activeTask: null, running: [], sessions: [], gallery: {}, scan: { on: false, dir: '', found: 0 }, maximized: false,
   fab: { state: 'idle', data: null, tried: 0 },
   plugins: {}, plgFilter: 'project', plgSearch: '', update: { state: 'idle' },
+  board: {}, ideas: {},
   fabLib: { data: null, loading: false }, fabType: 'all', fabUe: '', fabQ: '', fabSort: localStorage.getItem('fabSort') || 'name'
 };
 const $ = (s, r = document) => r.querySelector(s);
@@ -76,6 +77,7 @@ function engLabel(p) {
   return 'UE ' + (p.association || '?');
 }
 const assocLabel = (a) => (isGuid(a) ? t('p.source') : 'UE ' + (a || '?'));
+const LIVE_TABS = ['notes', 'board', 'ideas'];
 const isRunning = (p) => S.running.includes(p.key);
 function fmtDur(ms) { const m = Math.round((ms || 0) / 60000); if (m < 60) return m + ' min'; const h = Math.floor(m / 60); return h + ' h' + (m % 60 ? ' ' + (m % 60) + ' min' : ''); }
 const totalLaunches = (p) => S.history.filter((h) => h.key === p.key).length || p.launchCount;
@@ -104,7 +106,7 @@ function toast(title, msg = '', kind = '') {
 
 function applyData(d) {
   if (!d) return;
-  for (const k of ['engines', 'projects', 'settings', 'scanFolders', 'history', 'lastScan', 'platform', 'version', 'hidden', 'sessions', 'running', 'update']) if (d[k] !== undefined) S[k] = d[k];
+  for (const k of ['engines', 'projects', 'settings', 'scanFolders', 'history', 'lastScan', 'platform', 'version', 'hidden', 'sessions', 'running', 'update', 'ideaHotkey', 'overlayHotkey']) if (d[k] !== undefined) S[k] = d[k];
   syncUeIcon();
   if (S.view === 'project' && !P(S.selected)) S.view = 'library';
   applyTheme();
@@ -185,6 +187,7 @@ function renderTop() {
     <div class="winctl"><button data-act="win" data-w="min" title="${t('win.min')}">${icon('minimize', 12)}</button><button data-act="win" data-w="max" title="${t(S.maximized ? 'win.restore' : 'win.max')}">${icon(S.maximized ? 'restore' : 'maximize', 12)}</button><button data-act="win" data-w="close" class="x" title="${t(S.settings.closeToTray ? 'win.tray' : 'btn.close')}">${icon('close', 12)}</button></div>`;
 }
 function renderView() {
+  unmountBoard();
   const fn = { home: viewHome, library: viewLibrary, project: viewProject, engines: viewEngines, fab: viewFabLib, tasks: viewTasks, settings: viewSettings }[S.view];
   $('#view').innerHTML = fn ? fn() : '';
   afterRender();
@@ -419,7 +422,7 @@ function viewProject() {
     ${clockCard()}
   </aside>
   <section class="panel main">
-    <div class="tabs">${[['overview', 'info'], ['plugins', 'layers'], ['gallery', 'image'], ['storage', 'drive'], ['build', 'hammer'], ['notes', 'note']].map(([x, ic]) => `<button class="${S.ptab === x ? 'on' : ''}" data-act="ptab" data-t="${x}">${icon(ic, 15)} ${t('tab.' + x)}</button>`).join('')}</div>
+    <div class="tabs">${[['overview', 'info'], ['plugins', 'layers'], ['gallery', 'image'], ['storage', 'drive'], ['build', 'hammer'], ['ideas', 'idea'], ['board', 'palette'], ['notes', 'note']].map(([x, ic]) => `<button class="${S.ptab === x ? 'on' : ''}" data-act="ptab" data-t="${x}">${icon(ic, 15)} ${t('tab.' + x)}</button>`).join('')}</div>
     <div class="scroll" id="ptab">${projectTab(p)}</div>
   </section>`;
 }
@@ -443,6 +446,8 @@ function projectTab(p) {
       ${card('shortcut', 'shortcut', 'act.shortcut', t('tip.4'))}${card('shortcutGame', 'gamepad', 'act.shortcutGame', t('act.game'))}
       ${card('terminal', 'app:terminal', 'act.terminal', t('b.terminal.d'))}${card('logs', 'log', 'act.logs', '')}</div>`;
   }
+  if (S.ptab === 'ideas') return tabIdeas(p);
+  if (S.ptab === 'board') return `<div class="boardhost" id="boardHost"></div>`;
   if (S.ptab === 'notes') {
     return `<div class="block" style="margin-top:0"><h4>${icon('tag', 14)} ${t('notes.tags')}</h4>
       <div class="tagin">${p.tags.map((tg) => `<span class="tile-chip">${esc(tg)} <span style="cursor:pointer;opacity:.6" data-act="removeTag" data-tag="${esc(tg)}">${icon('x', 12)}</span></span>`).join('')}<input id="tagIn" placeholder="${t('notes.addTag')}"/></div></div>
@@ -539,6 +544,26 @@ function updateRow() {
   return `<div class="grow"><b>${t('up.title')}</b><small>${desc}</small></div><div style="display:flex;gap:6px;align-items:center">${ctrl}</div>`;
 }
 function paintUpdate() { const el = $('#updRow'); if (el) el.innerHTML = updateRow(); renderRail(); }
+
+// Quick ideas captured with the global hotkey, newest first.
+const hotkeyLabel = (a) => String(a || '').replace('Super', 'Win').replace('CommandOrControl', 'Ctrl').split('+').map((k) => `<kbd>${esc(k)}</kbd>`).join(' ');
+function loadIdeas(key) {
+  S.ideas[key] = null;
+  api.ideas(key).then((r) => { S.ideas[key] = r.ok ? r.data : []; const p = P(key); if (p && S.view === 'project' && S.selected === key && S.ptab === 'ideas') rerenderTab(p); });
+}
+function tabIdeas(p) {
+  const list = S.ideas[p.key], hk = S.ideaHotkey;
+  const head = `<div class="ideahead card"><span class="ib">${icon('idea', 22)}</span><div class="grow"><b>${t('id.title')}</b><small>${hk ? t('id.how', { k: hotkeyLabel(hk) }) : t('id.noKey')}</small></div>
+    <button class="btn pri" data-act="ideaCapture">${icon('idea', 15)} ${t('id.capture')}</button></div>`;
+  if (!list) return head + `<div class="empty"><div><div class="ill"><span class="spinner" style="width:26px;height:26px;border-width:3px"></span></div></div></div>`;
+  if (!list.length) return head + `<div class="empty"><div><div class="ill">${icon('idea', 36)}</div><b>${t('id.empty')}</b>${t('id.emptySub')}</div></div>`;
+  return head + `<div class="ideas">${list.map((x, i) => `<div class="idea card" style="animation-delay:${Math.min(i, 16) * 25}ms">
+      ${x.url ? `<img src="${esc(x.url)}" alt="" loading="lazy" decoding="async" data-act="ideaImg" data-id="${esc(x.id)}" title="${t('bd.open')}"/>` : ''}
+      <div class="ibody">${x.text ? `<p>${esc(x.text)}</p>` : `<p class="muted">${t('id.noText')}</p>`}
+        <div class="ifoot"><small>${icon('clock', 12)} ${esc(ago(x.t))}</small><span class="grow"></span>
+          <button class="btn sm ghost" data-act="ideaBoard" data-id="${esc(x.id)}" title="${t('id.toBoardD')}">${icon('palette', 14)} ${t('id.toBoard')}</button>
+          <button class="btn sm icon ghost danger" data-act="ideaDel" data-id="${esc(x.id)}" title="${t('bd.delete')}">${icon('trash', 14)}</button></div></div></div>`).join('')}</div>`;
+}
 
 function tabStorage(p) {
   const a = S.analysis[p.key], k = esc(p.key);
@@ -700,6 +725,13 @@ function viewTasks() {
 const colorLog = (s) => esc(s).split('\n').map((l) => /error|failed|fatal/i.test(l) ? `<span class="e">${l}</span>` : /warning/i.test(l) ? `<span class="w">${l}</span>` : /success|succeeded|complete/i.test(l) ? `<span class="ok">${l}</span>` : l).join('\n');
 function fillTerm() { const el = $('#term'), cur = S.tasks.find((x) => x.id === S.activeTask); if (el && cur) { el.innerHTML = colorLog(cur.log || ''); el.scrollTop = el.scrollHeight; } }
 
+// A global shortcut picker; says so when Windows or another app already uses the combination.
+function hotkeyRow(setting, active, id, label, choices) {
+  const want = S.settings[setting] || '';
+  const status = want && !active ? `<span style="color:var(--bad)">${t('set.ideaKeyBusy')}</span>` : active && active !== want ? t('set.ideaKeyAlt', { k: hotkeyLabel(active) }) : t(label + '.d');
+  const opts = [...choices.map((v) => [v, v.replace('Super', 'Win').replace('CommandOrControl', 'Ctrl').split('+').join(' + ')]), ['', t('set.ideaKeyOff')]];
+  return `<div class="srow"><div class="grow"><b>${t(label)}</b><small>${status}</small></div><select class="sel" id="${id}" style="width:210px">${opts.map(([v, l]) => `<option value="${v}" ${want === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>`;
+}
 function viewSettings() {
   const s = S.settings;
   const row = (title, desc, ctrl) => `<div class="srow"><div class="grow"><b>${title}</b>${desc ? `<small>${desc}</small>` : ''}</div>${ctrl}</div>`;
@@ -720,6 +752,8 @@ function viewSettings() {
       ${row(t('set.startMin'), t('set.startMin.d'), tog('startMinimized'))}
       ${row(t('set.tray'), t('set.tray.d'), tog('closeToTray'))}
       ${row(t('set.notify'), t('set.notify.d'), tog('notifications'))}
+      ${hotkeyRow('ideaHotkey', S.ideaHotkey, 'ideaKey', 'set.ideaKey', ['Super+Alt+U', 'CommandOrControl+Alt+U', 'CommandOrControl+Shift+Space', 'Super+Alt+I'])}
+      ${hotkeyRow('overlayHotkey', S.overlayHotkey, 'overlayKey', 'set.overlayKey', ['Super+Alt+O', 'CommandOrControl+Alt+O', 'CommandOrControl+Shift+O', 'Super+Alt+R'])}
       ${row(t('set.fab'), t('set.fab.d'), tog('fabFree'))}
       ${row(t('set.autoUpdate'), t('set.autoUpdate.d'), tog('autoUpdate'))}
     </div>
@@ -792,6 +826,8 @@ function afterRender() {
     d.oninput = () => { $('#depthV').textContent = d.value; };
     d.onchange = () => saveSettings({ scanDepth: Number(d.value) }, false);
     $('#defArgs').onchange = (e) => saveSettings({ defaultArgs: e.target.value }, false);
+    $('#ideaKey').onchange = (e) => saveSettings({ ideaHotkey: e.target.value });
+    $('#overlayKey').onchange = (e) => saveSettings({ overlayHotkey: e.target.value });
     const sc = $('#setScroll');
     sc.onscroll = () => {
       let cur = 'general';
@@ -800,9 +836,12 @@ function afterRender() {
     };
   }
 }
-function rerenderTab(p) { $('#ptab').innerHTML = projectTab(p); bindProject(); }
+function rerenderTab(p) {
+  unmountBoard(); $('#ptab').innerHTML = projectTab(p); bindProject(); }
 function bindProject() {
   const p = P(S.selected); if (!p) return;
+  if (S.ptab === 'board') mountBoard(p.key);
+  if (S.ptab === 'ideas' && S.ideas[p.key] === undefined) loadIdeas(p.key);
   if (S.ptab === 'overview' && S.details[p.key] === undefined) {
     S.details[p.key] = null;
     api.details(p.key).then((r) => { if (r.ok) { S.details[p.key] = r.data; if (S.view === 'project' && S.selected === p.key && S.ptab === 'overview') rerenderTab(p); } });
@@ -944,7 +983,7 @@ async function launch(key, opts = {}) {
 }
 async function saveSettings(patch, rerender = true) {
   const s = await call('setSettings', patch);
-  if (s) { S.settings = s; applyTheme(); if (rerender) render(); }
+  if (s) { if ('ideaHotkeyActive' in s) { S.ideaHotkey = s.ideaHotkeyActive; S.overlayHotkey = s.overlayHotkeyActive; delete s.ideaHotkeyActive; delete s.overlayHotkeyActive; } S.settings = s; applyTheme(); if (rerender) render(); }
 }
 const kOf = (el) => el.dataset.key || S.selected;
 const runTask = async (fn, ...a) => { const id = await call(fn, ...a); if (id) { S.activeTask = id; setView('tasks'); } };
@@ -956,6 +995,13 @@ const A = {
   guideHide: () => { localStorage.setItem('guideDone', '1'); render(); },
   fabOpen: (el) => call('openExternal', el.dataset.url),
   fabRetry: () => { loadFab(true); render(); },
+  ideaCapture: () => call('ideaCapture'),
+  ideaImg: (el) => { const x = (S.ideas[S.selected] || []).find((i) => i.id === el.dataset.id); if (x && x.img) call('openPath', x.img); },
+  ideaBoard: async (el) => { if ((await call('ideaToBoard', S.selected, el.dataset.id)) !== undefined) toast(t('id.onBoard'), '', 'ok'); },
+  ideaDel: async (el) => {
+    if (!(await confirmBox(t('id.delTitle'), t('id.delD'), t('bd.delete'), true))) return;
+    if ((await call('ideaDelete', S.selected, el.dataset.id)) !== undefined) { S.ideas[S.selected] = S.ideas[S.selected].filter((i) => i.id !== el.dataset.id); rerenderTab(P(S.selected)); }
+  },
   fabType: (el) => { S.fabType = el.dataset.t; renderView(); },
   fabUe: (el) => { S.fabUe = S.fabUe === el.dataset.v ? '' : el.dataset.v; renderView(); },
   fabClear: () => { S.fabType = 'all'; S.fabUe = ''; S.fabQ = ''; renderView(); },
@@ -1195,10 +1241,12 @@ document.addEventListener('keydown', (e) => {
 // drag & drop .uproject files / folders
 let dragDepth = 0;
 $('#dropIcon').innerHTML = icon('upload', 34);
-window.addEventListener('dragenter', (e) => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) { dragDepth++; $('#dropTitle').textContent = t('drop.title'); $('#dropSub').textContent = t('drop.sub'); $('#drop').classList.add('on'); } });
+const onBoard = () => S.view === 'project' && S.ptab === 'board';
+window.addEventListener('dragenter', (e) => { if (onBoard()) return; if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) { dragDepth++; $('#dropTitle').textContent = t('drop.title'); $('#dropSub').textContent = t('drop.sub'); $('#drop').classList.add('on'); } });
 window.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; $('#drop').classList.remove('on'); } });
 window.addEventListener('dragover', (e) => e.preventDefault());
 window.addEventListener('drop', async (e) => {
+  if (onBoard()) { e.preventDefault(); return; }
   e.preventDefault(); dragDepth = 0; $('#drop').classList.remove('on');
   const paths = [...e.dataTransfer.files].map((f) => api.pathForFile(f)).filter(Boolean);
   if (!paths.length) return;
@@ -1238,7 +1286,7 @@ api.onProjects((d) => {
   if (d.projects) S.projects = d.projects;
   if (d.engines) { S.engines = d.engines; syncUeIcon(); }
   if (d.lastScan) S.lastScan = d.lastScan;
-  if (S.view !== 'settings' && !(S.view === 'project' && S.ptab === 'notes')) renderView();
+  if (S.view !== 'settings' && !(S.view === 'project' && LIVE_TABS.includes(S.ptab))) renderView();
   renderTop();
 });
 api.onTask((m) => {
@@ -1260,7 +1308,7 @@ api.onRunning((m) => {
   S.running = m.running || []; if (m.sessions) S.sessions = m.sessions;
   if (m.key && P(m.key) && m.playTime !== undefined) P(m.key).playTime = m.playTime;
   if (wasRunning && !S.running.includes(m.key) && P(m.key)) toast(t('t.stopped'), pname(P(m.key)));
-  if (!(S.view === 'project' && S.ptab === 'notes') && S.view !== 'settings') renderView();
+  if (!(S.view === 'project' && LIVE_TABS.includes(S.ptab)) && S.view !== 'settings') renderView();
 });
 api.onUpdate((m) => {
   const prev = S.update.state;
@@ -1270,6 +1318,18 @@ api.onUpdate((m) => {
   paintUpdate();
 });
 api.onWindow((m) => { S.maximized = m.maximized; renderTop(); });
+api.onIdeas((m) => {
+  const p = P(m.key); if (!p) return;
+  delete S.ideas[m.key];
+  toast(t('id.saved'), pname(p), 'ok');
+  if (S.view === 'project' && S.selected === m.key && S.ptab === 'ideas') loadIdeas(m.key);
+});
+api.onOverlay((m) => { if (BD && BD.key === m.key) boardOverlayBar(m); });
+api.onNavBoard((m) => { if (P(m.key)) { S.ptab = 'board'; setView('project', { key: m.key }); } });
+api.onBoard((m) => {
+  if (BD && BD.key === m.key && BD.data) { for (const it of m.added || []) if (!boardItem(it.id)) BD.data.items.push(it); boardPaint(); boardSave(); return; }
+  delete S.board[m.key];
+});
 
 
 (async () => {

@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: uh:; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
+<title>Unreal Hub overlay</title>
+<style>
+  :root { --card: #f6f8fa; --text: #1c2433; --muted: #6c7787; --line: rgba(29, 40, 58, .14); --ink: #1b1f3b; --ink-t: #fff; --bar: rgba(246, 248, 250, .94); }
+  html.dark { --card: #1b212d; --text: #e8ecf3; --muted: #8b95a7; --line: rgba(255, 255, 255, .12); --ink: #e9edf6; --ink-t: #11151d; --bar: rgba(22, 27, 37, .92); }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; background: transparent; overflow: hidden; user-select: none; font: 13px/1.4 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; color: var(--text); }
+  .fi { font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets"; font-style: normal; line-height: 1; }
+
+  .bar { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 4px; padding: 5px 6px 5px 12px;
+    border-radius: 14px; background: var(--bar); border: 1px solid var(--line); box-shadow: 0 10px 30px rgba(0, 0, 0, .3); transition: opacity .35s; z-index: 100000; }
+  .bar.dim { opacity: .28; }
+  .bar .nm { font-weight: 600; max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-right: 6px; }
+  .bar .n { color: var(--muted); margin-right: 6px; }
+  .bar button { height: 28px; min-width: 28px; padding: 0 8px; border-radius: 9px; border: 0; background: transparent; color: var(--text); display: inline-flex; align-items: center; gap: 6px; font: inherit; cursor: pointer; }
+  .bar button:hover { background: var(--line); }
+  .bar button.on { background: var(--ink); color: var(--ink-t); }
+  .bar kbd { font: 600 10.5px/1 "Segoe UI", sans-serif; padding: 3px 5px; border-radius: 5px; background: var(--line); color: var(--muted); }
+
+  .pin { position: absolute; border-radius: 12px; cursor: move; box-shadow: 0 10px 30px rgba(0, 0, 0, .35); }
+  .pin img { width: 100%; height: 100%; object-fit: cover; border-radius: 12px; display: block; pointer-events: none; }
+  .pin.note { padding: 14px 16px; background: #fff3a8; color: #3a3410; border-radius: 4px 14px 14px 14px; font-weight: 500; font-size: 14px; white-space: pre-wrap; word-break: break-word; overflow: hidden; }
+  .pin.note.tint-pink { background: #ffd1e0; color: #4a1a2a; } .pin.note.tint-blue { background: #cfe4ff; color: #12304f; }
+  .pin.note.tint-green { background: #cdf3dc; color: #123a24; } .pin.note.tint-plain { background: var(--card); color: var(--text); }
+  .pin.color { background: var(--card); padding: 7px; display: flex; flex-direction: column; }
+  .pin.color i { flex: 1; border-radius: 8px; }
+  .pin.color b { font: 600 11.5px ui-monospace, Consolas, monospace; padding-top: 6px; color: var(--muted); }
+  .ghost .pin { cursor: default; }
+  .ctl { position: absolute; top: -15px; right: -8px; display: flex; gap: 3px; padding: 3px; border-radius: 10px; background: var(--bar); border: 1px solid var(--line);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, .3); opacity: 0; transition: opacity .15s; }
+  .pin:hover .ctl, .pin.drag .ctl { opacity: 1; }
+  .ghost .ctl, .ghost .rs { display: none; }
+  .ctl button { width: 24px; height: 24px; border: 0; border-radius: 7px; background: transparent; color: var(--text); cursor: pointer; display: grid; place-items: center; font-size: 12px; }
+  .ctl button:hover { background: var(--line); }
+  .ctl span { min-width: 34px; text-align: center; font-size: 11px; font-weight: 600; color: var(--muted); align-self: center; }
+  .rs { position: absolute; right: -6px; bottom: -6px; width: 16px; height: 16px; border-radius: 6px; background: var(--card); border: 2px solid var(--ink); cursor: nwse-resize; opacity: 0; transition: opacity .15s; }
+  .pin:hover .rs { opacity: 1; }
+  .empty { position: fixed; top: 58px; left: 50%; transform: translateX(-50%); padding: 10px 14px; border-radius: 12px; background: var(--bar); border: 1px solid var(--line); color: var(--muted); font-size: 12.5px; max-width: 420px; text-align: center; }
+</style>
+</head>
+<body>
+  <div class="bar" id="bar">
+    <span class="nm" id="name"></span><span class="n" id="count"></span>
+    <button id="ghost"><i class="fi">&#xED1A;</i><span id="lGhost"></span></button>
+    <button id="board"><i class="fi">&#xE790;</i><span id="lBoard"></span></button>
+    <kbd id="hk"></kbd>
+    <button id="close"><i class="fi">&#xE711;</i></button>
+  </div>
+  <div class="empty" id="empty" hidden></div>
+  <div id="pins"></div>
+<script>
+  const q = new URLSearchParams(location.search);
+  const $ = (id) => document.getElementById(id);
+  if (q.get('dark') === '1') document.documentElement.classList.add('dark');
+  if (q.get('ink')) document.documentElement.style.setProperty('--ink', q.get('ink'));
+  const ES = q.get('lang') === 'es';
+  const T = ES
+    ? { ghost: 'Fantasma', ghostOn: 'Fantasma: las referencias no se pueden tocar y los clics pasan al editor', ghostOff: 'Fantasma: actívalo para que nada estorbe', board: 'Moodboard', close: 'Ocultar referencias', refs: (n) => n + (n === 1 ? ' referencia' : ' referencias'), empty: 'No hay referencias fijadas. En el moodboard del proyecto, pasa el ratón por una imagen o nota y pulsa el alfiler.', op: 'Transparencia (también con la rueda)', unpin: 'Quitar del overlay', less: 'Más transparente', more: 'Menos transparente' }
+    : { ghost: 'Ghost', ghostOn: 'Ghost: references cannot be touched and clicks go to the editor', ghostOff: 'Ghost: turn it on so nothing gets in the way', board: 'Moodboard', close: 'Hide references', refs: (n) => n + (n === 1 ? ' reference' : ' references'), empty: 'No pinned references. On the project moodboard, hover an image or note and press the pin.', op: 'Transparency (also with the mouse wheel)', unpin: 'Remove from the overlay', less: 'More transparent', more: 'Less transparent' };
+  $('lGhost').textContent = T.ghost; $('lBoard').textContent = T.board; $('close').title = T.close;
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  let pins = [], ghost = false, interactive = false, mode = null, saveT = null, dimT = null;
+  const save = () => { clearTimeout(saveT); saveT = setTimeout(() => api.overlaySave(pins.map(({ url, ...p }) => p), ghost), 350); };
+  const setInteractive = (on) => { if (on !== interactive) { interactive = on; api.overlayInteract(on); } };
+
+  function pinHtml(p) {
+    const st = `left:${p.x}px;top:${p.y}px;width:${p.w}px;height:${p.h}px;opacity:${p.opacity ?? 1}`;
+    const body = p.type === 'image' ? `<img src="${esc(p.url || '')}" alt="" draggable="false"/>`
+      : p.type === 'note' ? esc(p.text)
+      : `<i style="background:${esc(p.color)}"></i><b>${esc(String(p.color).toUpperCase())}</b>`;
+    return `<div class="pin ${p.type} ${p.tint ? 'tint-' + p.tint : ''}" data-id="${esc(p.id)}" style="${st}">${body}
+      <div class="ctl" title="${T.op}"><button data-a="less" title="${T.less}"><i class="fi">&#xE738;</i></button><span>${Math.round((p.opacity ?? 1) * 100)}%</span><button data-a="more" title="${T.more}"><i class="fi">&#xE710;</i></button><button data-a="unpin" title="${T.unpin}"><i class="fi">&#xE711;</i></button></div>
+      <span class="rs" data-a="resize"></span></div>`;
+  }
+  function paint() {
+    $('pins').innerHTML = pins.map(pinHtml).join('');
+    $('count').textContent = T.refs(pins.length);
+    $('empty').hidden = pins.length > 0; $('empty').textContent = T.empty;
+    document.body.classList.toggle('ghost', ghost);
+    $('ghost').classList.toggle('on', ghost); $('ghost').title = ghost ? T.ghostOn : T.ghostOff;
+  }
+  const pinOf = (el) => pins.find((p) => p.id === el.dataset.id);
+  function setOpacity(p, v) {
+    p.opacity = Math.round(Math.max(0.15, Math.min(1, v)) * 20) / 20;
+    const el = document.querySelector(`.pin[data-id="${CSS.escape(p.id)}"]`);
+    if (el) { el.style.opacity = p.opacity; el.querySelector('.ctl span').textContent = Math.round(p.opacity * 100) + '%'; }
+    save();
+  }
+
+  // the bar fades when not in use so it does not cover the editor's own toolbar
+  const wake = () => { $('bar').classList.remove('dim'); clearTimeout(dimT); dimT = setTimeout(() => $('bar').classList.add('dim'), 2500); };
+
+  // Clicks fall through to the editor everywhere except over a reference (unless ghost) or the bar.
+  document.addEventListener('mousemove', (e) => {
+    if (mode) return onDrag(e);
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const overBar = !!(el && el.closest('.bar'));
+    if (overBar) wake();
+    setInteractive(overBar || (!ghost && !!(el && el.closest('.pin'))));
+  });
+  document.addEventListener('mousedown', (e) => {
+    const node = e.target.closest('.pin');
+    if (!node || ghost || e.button !== 0) return;
+    const p = pinOf(node), a = e.target.closest('[data-a]');
+    if (a && a.dataset.a === 'less') return setOpacity(p, (p.opacity ?? 1) - 0.1);
+    if (a && a.dataset.a === 'more') return setOpacity(p, (p.opacity ?? 1) + 0.1);
+    if (a && a.dataset.a === 'unpin') { pins = pins.filter((x) => x !== p); paint(); save(); setInteractive(false); return; }
+    node.parentNode.appendChild(node); // bring to front
+    pins = pins.filter((x) => x !== p).concat(p);
+    node.classList.add('drag');
+    mode = { kind: a && a.dataset.a === 'resize' ? 'resize' : 'move', p, node, sx: e.screenX, sy: e.screenY, x: p.x, y: p.y, w: p.w, h: p.h };
+    e.preventDefault();
+  });
+  function onDrag(e) {
+    const m = mode, dx = e.screenX - m.sx, dy = e.screenY - m.sy;
+    if (m.kind === 'move') {
+      m.p.x = Math.round(Math.max(-m.p.w + 40, Math.min(innerWidth - 40, m.x + dx)));
+      m.p.y = Math.round(Math.max(0, Math.min(innerHeight - 30, m.y + dy)));
+      m.node.style.left = m.p.x + 'px'; m.node.style.top = m.p.y + 'px';
+    } else {
+      const w = Math.max(70, m.w + dx);
+      const h = m.p.type === 'image' && !e.shiftKey ? w * (m.h / m.w) : Math.max(50, m.h + dy);
+      m.p.w = Math.round(w); m.p.h = Math.round(h);
+      m.node.style.width = m.p.w + 'px'; m.node.style.height = m.p.h + 'px';
+    }
+  }
+  document.addEventListener('mouseup', () => { if (mode) { mode.node.classList.remove('drag'); mode = null; save(); } });
+  document.addEventListener('wheel', (e) => {
+    const node = !ghost && e.target.closest && e.target.closest('.pin');
+    if (node) setOpacity(pinOf(node), (pinOf(node).opacity ?? 1) - Math.sign(e.deltaY) * 0.05);
+  }, { passive: true });
+
+  $('ghost').onclick = () => { ghost = !ghost; paint(); save(); };
+  $('board').onclick = () => api.overlayOpenBoard();
+  $('close').onclick = () => api.overlayHide();
+
+  api.overlayInit().then((r) => {
+    if (!r.ok) return;
+    const d = r.data;
+    $('name').textContent = d.name;
+    $('hk').textContent = (d.hotkey || '').replace('Super', 'Win').replace('CommandOrControl', 'Ctrl').replace(/\+/g, ' + ');
+    $('hk').hidden = !d.hotkey;
+    pins = d.pins; ghost = d.ghost;
+    // pins saved on a bigger screen stay reachable
+    for (const p of pins) { p.x = Math.min(p.x, innerWidth - 60); p.y = Math.min(p.y, innerHeight - 40); }
+    paint(); wake();
+  });
+  api.onOverlayPins((list) => { pins = list; paint(); wake(); });
+</script>
+</body>
+</html>

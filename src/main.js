@@ -1,5 +1,5 @@
 
-const { app, BrowserWindow, ipcMain, dialog, shell, nativeImage, nativeTheme, clipboard, Tray, Menu, Notification, protocol, net } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, nativeImage, nativeTheme, clipboard, Tray, Menu, Notification, protocol, net, globalShortcut, desktopCapturer, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fsp = fs.promises;
@@ -12,15 +12,13 @@ const IS_WIN = process.platform === 'win32';
 const IS_MAC = process.platform === 'darwin';
 let win = null;
 
-// Single instance: a second launch exits at once and brings the running hub to the front
-// (restored from minimized or from the tray, or the splash while it is still loading).
 const PRIMARY = app.requestSingleInstanceLock();
 if (!PRIMARY) app.exit(0);
 app.on('second-instance', (_e, argv) => { if (!handleArgv(argv)) showWindow(); });
 
-// Thumbnails are served from a disk cache through uh://thumb/ instead of being kept in memory as data URLs.
+
 protocol.registerSchemesAsPrivileged([{ scheme: 'uh', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
-// Chromium keeps a spare renderer process warm for fast navigation; the hub has a single page, so it is wasted RAM.
+
 app.commandLine.appendSwitch('disable-features', 'SpareRendererForSitePerProcess');
 
 const DEFAULT_STORE = {
@@ -31,7 +29,10 @@ const DEFAULT_STORE = {
   knownProjects: [],
   meta: {},
   history: [],              
-  sessions: [],              
+  sessions: [],
+  ideas: {},                
+  boards: {},
+  overlays: {},             
   lastScan: 0,
   settings: {
     theme: 'system',        
@@ -57,6 +58,8 @@ const DEFAULT_STORE = {
     fabFree: true,
     autoUpdate: true,
     splash: true,
+    ideaHotkey: 'Super+Alt+U',
+    overlayHotkey: 'Super+Alt+O',
     fabFolders: []
   }
 };
@@ -145,8 +148,6 @@ async function engineVersion(root) {
   } catch { return null; }
 }
 
-// Real program icons (Unreal Editor, Explorer, PowerShell, IDE) read from the files themselves,
-// small PNG data URLs cached per file.
 const iconCache = new Map();
 async function exeIcon(file) {
   if (iconCache.has(file)) return iconCache.get(file);
@@ -156,7 +157,7 @@ async function exeIcon(file) {
   return url;
 }
 
-// The official Unreal logo shipped inside each engine (the one the editor itself uses).
+
 async function engineLogo(root) {
   for (const rel of ['Engine/Content/Slate/Starship/Common/UELogo.png', 'Engine/Content/Editor/Slate/About/UnrealLogo.png']) {
     const f = path.join(root, rel);
@@ -387,7 +388,6 @@ function registerThumbProtocol() {
     } catch { return new Response(null, { status: 404 }); }
   });
 }
-// Drop cached thumbnails not used for a month.
 async function pruneThumbs() {
   let files = [];
   try { files = await fsp.readdir(thumbDir()); } catch { return; }
@@ -808,8 +808,10 @@ function launchProject(key, opts = {}) {
   const child = spawn(e.exe, args, { detached: true, stdio: 'ignore', cwd: p.dir });
   const start = Date.now();
   running.set(key, { pid: child.pid, start });
+  overlayOnLaunch(key);
   child.on('exit', () => {
     running.delete(key);
+    overlayOnExit(key);
     const end = Date.now();
     if (end - start > 5000) {
       store.sessions.push({ key, start, end });
@@ -862,7 +864,7 @@ function showWindow() {
 }
 // Windows only lets the foreground app take focus; briefly going always-on-top gets past the focus-stealing guard.
 function bringToFront(w) {
-  if (IS_WIN) { w.setAlwaysOnTop(true); w.show(); w.focus(); w.setAlwaysOnTop(false); }
+  if (IS_WIN && !w.isAlwaysOnTop()) { w.setAlwaysOnTop(true); w.show(); w.focus(); w.setAlwaysOnTop(false); }
   else { w.show(); w.focus(); }
   if (w === win) app.focus({ steal: true });
 }
@@ -871,7 +873,7 @@ function recentForMenus(n) {
 }
 function trText(k) {
   const es = store.settings.language === 'es';
-  return ({ open: es ? 'Abrir Unreal Hub' : 'Open Unreal Hub', recent: es ? 'Recientes' : 'Recent projects', scan: es ? 'Escanear discos' : 'Scan drives', quit: es ? 'Salir' : 'Quit', running: es ? 'abierto' : 'running', none: es ? 'Sin proyectos recientes' : 'No recent projects' })[k];
+  return ({ open: es ? 'Abrir Unreal Hub' : 'Open Unreal Hub', recent: es ? 'Recientes' : 'Recent projects', scan: es ? 'Escanear discos' : 'Scan drives', quit: es ? 'Salir' : 'Quit', running: es ? 'abierto' : 'running', none: es ? 'Sin proyectos recientes' : 'No recent projects', idea: es ? 'Capturar una idea' : 'Capture an idea', ovShow: es ? 'Mostrar referencias sobre el editor' : 'Show references over the editor', ovHide: es ? 'Ocultar referencias' : 'Hide references' })[k];
 }
 function updateTray() {
   if (!tray) return;
@@ -882,6 +884,8 @@ function updateTray() {
     { label: trText('recent'), enabled: false },
     ...(rec.length ? rec.map((p) => ({ label: (p.alias || p.name) + (running.has(p.key) ? `  (${trText('running')})` : ''), click: () => { try { launchProject(p.key); } catch (e) { notify('Unreal Hub', e.message); } } })) : [{ label: trText('none'), enabled: false }]),
     { type: 'separator' },
+    { label: trText('idea') + (ideaHotkeyActive ? '	' + ideaHotkeyActive.replace('Super', 'Win').replace('CommandOrControl', 'Ctrl') : ''), click: () => captureIdea().catch(() => {}) },
+    { label: trText(overlayWin ? 'ovHide' : 'ovShow') + (overlayHotkeyActive ? '	' + overlayHotkeyActive.replace('Super', 'Win').replace('CommandOrControl', 'Ctrl') : ''), click: () => toggleOverlay() },
     { label: trText('scan'), click: () => deepScan() },
     { label: trText('quit'), click: () => { quitting = true; app.quit(); } }
   ]));
@@ -1317,6 +1321,8 @@ function registerIpc() {
     sessions: store.sessions,
     running: [...running.keys()],
     update: { ...update, checked: update.checked || store.updateChecked || 0 },
+    ideaHotkey: ideaHotkeyActive,
+    overlayHotkey: overlayHotkeyActive,
     paths:{ userData: app.getPath('userData'), desktop: app.getPath('desktop') }
   });
 
@@ -1330,6 +1336,41 @@ function registerIpc() {
     return d;
   });
   h('app:ready', async () => { revealMain(); });
+  // quick ideas
+  h('idea:capture', async () => captureIdea());
+  h('idea:init', async () => ({
+    projects: [...projectCache].sort((a, b) => (b.lastLaunched || 0) - (a.lastLaunched || 0)).map((p) => ({ key: p.key, name: p.alias || p.name, running: running.has(p.key) })),
+    selected: currentProjectKey(),
+    shot: ideaShot ? ideaShot.resize({ width: 480, quality: 'good' }).toDataURL() : ''
+  }));
+  h('idea:save', async (data) => { const r = await saveIdea(data || {}); if (ideaWin) ideaWin.close(); return r; });
+  h('idea:close', async () => { if (ideaWin) ideaWin.close(); });
+  h('ideas:list', async (key) => listIdeas(key));
+  h('ideas:delete', async (key, id) => deleteIdea(key, id));
+  h('ideas:toBoard', async (key, id) => ideaToBoard(key, id));
+  // moodboard
+  // reference overlay
+  h('overlay:info', async (key) => overlayInfo(key));
+  h('overlay:toggle', async (key) => { toggleOverlay(key); return overlayInfo(key); });
+  h('overlay:pin', async (key, item) => pinToOverlay(key, item || {}));
+  h('overlay:setAuto', async (key, on) => { ovState(key).auto = !!on; saveStore(); overlayChanged(key); return overlayInfo(key); });
+  h('overlay:init', async () => {
+    const p = projectCache.find((x) => x.key === overlayKey);
+    return { key: overlayKey, name: p ? (p.alias || p.name) : '', pins: await overlayPins(overlayKey), ghost: !!ovState(overlayKey).ghost, hotkey: overlayHotkeyActive };
+  });
+  h('overlay:save', async (pins, ghost) => { if (overlayKey) saveOverlay(overlayKey, pins, ghost); });
+  // clicks pass through to the editor unless the mouse is over a reference or the overlay bar
+  h('overlay:interact', async (on) => { if (overlayWin && !overlayWin.isDestroyed()) overlayWin.setIgnoreMouseEvents(!on, { forward: true }); });
+  h('overlay:hide', async () => hideOverlay());
+  h('overlay:openBoard', async () => { const k = overlayKey; showWindow(); if (k) setTimeout(() => send('nav:board', { key: k }), 400); });
+  h('board:get', async (key) => getBoard(key));
+  h('board:save', async (key, board) => saveBoard(key, board || {}));
+  h('board:addFiles', async (key, files) => boardAddFiles(key, files || []));
+  h('board:pick', async (key) => {
+    const r = await dialog.showOpenDialog(win, { filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'bmp'] }], properties: ['openFile', 'multiSelections'] });
+    return r.canceled ? [] : boardAddFiles(key, r.filePaths);
+  });
+  h('board:paste', async (key) => { const img = clipboard.readImage(); return img.isEmpty() ? null : boardImage(key, img, 'png'); });
   // Fab / Vault library: the last scan is returned at once; a scan runs when there is none yet.
   h('fablib:list', async () => store.fabLib || scanFabLibrary());
   h('fablib:scan', async () => scanFabLibrary());
@@ -1657,7 +1698,10 @@ function registerIpc() {
     saveStore();
     if ('theme' in patch || 'openAtLogin' in patch) applySystemSettings();
     if (patch.autoUpdate) checkUpdate().catch(() => {});
-    return store.settings;
+    if ('ideaHotkey' in patch) registerIdeaHotkey();
+    if ('overlayHotkey' in patch) registerOverlayHotkey();
+    if ('language' in patch) updateTray();
+    return { ...store.settings, ideaHotkeyActive, overlayHotkeyActive };
   });
 
   h('config:export', async () => {
@@ -1692,6 +1736,266 @@ function registerIpc() {
     else if (action === 'close') win.close();
     else if (action === 'devtools') win.webContents.toggleDevTools();
   });
+}
+
+/* ------------------------------------------------------------------ Quick ideas (global hotkey) */
+// Screenshots and moodboard images live in the hub's data folder, never inside the project.
+const ideaDir = (key) => userFile('ideas', hash(key));
+const boardDir = (key) => userFile('boards', hash(key));
+const newId = () => Date.now().toString(36) + crypto.randomBytes(3).toString('hex');
+const insideDir = (file, dir) => normKey(file).startsWith(normKey(dir) + '/');
+let ideaWin = null, ideaShot = null, ideaHotkeyActive = '';
+
+// The project you are most likely working on: the editor that was opened last and is still running, else the last launched.
+function currentProjectKey() {
+  const live = [...running.entries()].sort((a, b) => b[1].start - a[1].start)[0];
+  if (live) return live[0];
+  const rec = recentForMenus(1)[0];
+  return rec ? rec.key : (projectCache[0] && projectCache[0].key) || '';
+}
+
+async function captureIdea() {
+  if (ideaWin && !ideaWin.isDestroyed()) { bringToFront(ideaWin); return; }
+  // grab the screen under the cursor before our window shows up on it
+  const d = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  ideaShot = null;
+  try {
+    const size = { width: Math.round(d.size.width * d.scaleFactor), height: Math.round(d.size.height * d.scaleFactor) };
+    const srcs = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: size });
+    const src = srcs.find((x) => x.display_id === String(d.id)) || srcs[0];
+    if (src && !src.thumbnail.isEmpty()) ideaShot = src.thumbnail;
+  } catch {}
+  const dark = nativeTheme.shouldUseDarkColors;
+  const W = 520, H = 740;
+  ideaWin = new BrowserWindow({
+    width: W, height: H, x: Math.round(d.workArea.x + (d.workArea.width - W) / 2), y: Math.round(d.workArea.y + (d.workArea.height - H) / 2),
+    frame: false, transparent: true, resizable: false, minimizable: false, maximizable: false, fullscreenable: false,
+    alwaysOnTop: true, skipTaskbar: true, show: false, title: 'Unreal Hub', backgroundColor: '#00000000',
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false, spellcheck: true }
+  });
+  ideaWin.setAlwaysOnTop(true, 'screen-saver');
+  const ink = (SPLASH_INK[store.settings.accent] || SPLASH_INK.ink)[dark ? 1 : 0];
+  ideaWin.loadFile(path.join(__dirname, 'idea.html'), { query: { dark: dark ? '1' : '0', ink, lang: store.settings.language || 'en', key: ideaHotkeyActive } });
+  ideaWin.once('ready-to-show', () => bringToFront(ideaWin));
+  ideaWin.on('closed', () => { ideaWin = null; ideaShot = null; });
+}
+
+async function saveIdea({ key, text, includeShot, toBoard }) {
+  const p = getProject(key);
+  const id = newId();
+  let img = null;
+  if (includeShot && ideaShot) {
+    let im = ideaShot;
+    if (im.getSize().width > 1920) im = im.resize({ width: 1920, quality: 'good' });
+    await fsp.mkdir(ideaDir(key), { recursive: true });
+    img = path.join(ideaDir(key), id + '.jpg');
+    await fsp.writeFile(img, im.toJPEG(88));
+  }
+  const idea = { id, t: Date.now(), text: String(text || '').trim().slice(0, 4000), img };
+  if (!idea.text && !img) throw new Error('EMPTY_IDEA');
+  (store.ideas[key] ||= []).unshift(idea);
+  if (toBoard) await ideaToBoard(key, id);
+  saveStore();
+  send('ideas:update', { key });
+  notify('Unreal Hub', (store.settings.language === 'es' ? 'Idea guardada en ' : 'Idea saved to ') + (p.alias || p.name));
+  return idea;
+}
+async function listIdeas(key) {
+  return Promise.all((store.ideas[key] || []).map(async (x) => ({ ...x, url: x.img ? await thumbRef(x.img, 960) : null })));
+}
+async function deleteIdea(key, id) {
+  const list = store.ideas[key] || [];
+  const x = list.find((i) => i.id === id);
+  if (x && x.img && insideDir(x.img, ideaDir(key))) {
+    // the moodboard may still show this screenshot: it keeps its own copy, so the file can go
+    await fsp.rm(x.img, { force: true }).catch(() => {});
+  }
+  store.ideas[key] = list.filter((i) => i.id !== id);
+  saveStore();
+}
+
+function registerIdeaHotkey() {
+  if (ideaHotkeyActive) { try { globalShortcut.unregister(ideaHotkeyActive); } catch {} }
+  ideaHotkeyActive = '';
+  const wanted = store.settings.ideaHotkey;
+  if (!wanted) return '';
+  // Windows may already use the combination (Game Bar, another app): fall back to Ctrl+Alt+U
+  for (const acc of [wanted, 'CommandOrControl+Alt+U']) {
+    try { if (globalShortcut.register(acc, () => { captureIdea().catch(() => {}); })) { ideaHotkeyActive = acc; break; } } catch {}
+  }
+  updateTray();
+  return ideaHotkeyActive;
+}
+
+/* ------------------------------------------------------------------ Moodboard */
+const emptyBoard = () => ({ items: [], view: { x: 0, y: 0, z: 1 } });
+async function getBoard(key) {
+  const b = store.boards[key] || emptyBoard();
+  const items = await Promise.all(b.items.map(async (it) => (it.file ? { ...it, url: await thumbRef(it.file, 1280) } : it)));
+  return { items, view: b.view || emptyBoard().view };
+}
+function saveBoard(key, board) {
+  // only keep known fields: the renderer sends back what it displays
+  const keep = ['id', 'type', 'x', 'y', 'w', 'h', 'z', 'file', 'text', 'color', 'url', 'title', 'tint'];
+  const items = (board.items || []).slice(0, 500).map((it) => Object.fromEntries(Object.entries(it).filter(([k]) => keep.includes(k) && !(k === 'url' && it.type === 'image'))));
+  const before = new Set((store.boards[key] || emptyBoard()).items.filter((i) => i.file).map((i) => i.file));
+  const after = new Set(items.filter((i) => i.file).map((i) => i.file));
+  for (const f of before) if (!after.has(f) && insideDir(f, boardDir(key))) fsp.rm(f, { force: true }).catch(() => {});
+  store.boards[key] = { items, view: board.view || emptyBoard().view };
+  saveStore();
+}
+// Copies an image into the board's folder (so deleting or moving the original never breaks the board).
+async function boardImage(key, img, ext = 'jpg') {
+  if (!img || img.isEmpty()) return null;
+  let im = img;
+  if (im.getSize().width > 2400) im = im.resize({ width: 2400, quality: 'good' });
+  const id = newId();
+  await fsp.mkdir(boardDir(key), { recursive: true });
+  const file = path.join(boardDir(key), `${id}.${ext}`);
+  await fsp.writeFile(file, ext === 'png' ? im.toPNG() : im.toJPEG(90));
+  const { width, height } = im.getSize();
+  return { id, type: 'image', file, w: width, h: height, url: await thumbRef(file, 1280) };
+}
+async function boardAddFiles(key, files) {
+  const out = [];
+  for (const f of files.slice(0, 40)) {
+    if (!IMG_RE.test(f)) continue;
+    const it = await boardImage(key, nativeImage.createFromPath(f), /\.png$/i.test(f) ? 'png' : 'jpg');
+    if (it) out.push(it);
+  }
+  return out;
+}
+async function ideaToBoard(key, id) {
+  const x = (store.ideas[key] || []).find((i) => i.id === id);
+  if (!x) throw new Error('Idea not found.');
+  const b = store.boards[key] || emptyBoard();
+  const top = b.items.reduce((m, i) => Math.max(m, i.z || 0), 0);
+  const ox = 40 + (b.items.length % 6) * 30, oy = 40 + (b.items.length % 6) * 30;
+  const added = [];
+  if (x.img) {
+    const copy = await boardImage(key, nativeImage.createFromPath(x.img));
+    if (copy) { const w = 480; added.push({ ...copy, x: ox, y: oy, w, h: Math.round((copy.h / copy.w) * w), z: top + 1 }); }
+  }
+  if (x.text) added.push({ id: newId(), type: 'note', text: x.text, tint: 'yellow', x: ox + (x.img ? 500 : 0), y: oy, w: 260, h: 200, z: top + 2 });
+  b.items.push(...added.map(({ url, ...it }) => it));
+  store.boards[key] = b;
+  saveStore();
+  // an open board adds them itself, so a pending save there cannot drop them
+  send('board:update', { key, added });
+}
+
+/* ------------------------------------------------------------------ Reference overlay */
+// A transparent, always-on-top layer over the Unreal editor with pinned references (images, notes, colors).
+// Clicks go through to the editor except over a reference, so it can be moved without getting in the way.
+const overlayDir = (key) => userFile('overlay', hash(key));
+let overlayWin = null, overlayKey = '', overlayHotkeyActive = '', overlayAutoTimer = null;
+const ovState = (key) => (store.overlays[key] ||= { pins: [], auto: false, ghost: false });
+
+async function overlayPins(key) {
+  return Promise.all(ovState(key).pins.map(async (p) => (p.file ? { ...p, url: await thumbRef(p.file, 1280) } : p)));
+}
+function overlayInfo(key) {
+  const o = ovState(key);
+  return { pins: o.pins.length, auto: !!o.auto, open: !!overlayWin && overlayKey === key, hotkey: overlayHotkeyActive };
+}
+const overlayChanged = (key) => send('overlay:state', { key, ...overlayInfo(key) });
+
+function showOverlay(key) {
+  key = key || currentProjectKey();
+  if (!key) return;
+  if (overlayWin && !overlayWin.isDestroyed()) {
+    if (overlayKey === key) return;
+    overlayWin.destroy();
+  }
+  overlayKey = key;
+  // the screen the editor is most likely on: the one under the mouse
+  const d = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  overlayWin = new BrowserWindow({
+    ...d.bounds, frame: false, transparent: true, resizable: false, movable: false, minimizable: false, maximizable: false,
+    fullscreenable: false, skipTaskbar: true, hasShadow: false, focusable: false, alwaysOnTop: true, show: false,
+    title: 'Unreal Hub overlay', backgroundColor: '#00000000',
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false, spellcheck: false, backgroundThrottling: false }
+  });
+  overlayWin.setAlwaysOnTop(true, 'screen-saver');
+  overlayWin.setIgnoreMouseEvents(true, { forward: true });
+  const dark = nativeTheme.shouldUseDarkColors;
+  const ink = (SPLASH_INK[store.settings.accent] || SPLASH_INK.ink)[dark ? 1 : 0];
+  overlayWin.loadFile(path.join(__dirname, 'overlay.html'), { query: { dark: dark ? '1' : '0', ink, lang: store.settings.language || 'en' } });
+  overlayWin.once('ready-to-show', () => overlayWin && overlayWin.showInactive()); // never take the focus from the editor
+  overlayWin.on('closed', () => { const k = overlayKey; overlayWin = null; overlayKey = ''; if (k) overlayChanged(k); updateTray(); });
+  overlayChanged(key);
+  updateTray();
+}
+function hideOverlay() { if (overlayWin && !overlayWin.isDestroyed()) overlayWin.destroy(); }
+function toggleOverlay(key) {
+  if (overlayWin && !overlayWin.isDestroyed() && (!key || key === overlayKey)) return hideOverlay();
+  showOverlay(key);
+}
+
+async function pinToOverlay(key, item) {
+  const o = ovState(key);
+  if (o.pins.length >= 40) throw new Error('OVERLAY_FULL');
+  const id = newId();
+  const pin = { id, type: item.type, opacity: 1, w: Math.min(item.w || 320, 420), h: 0, x: 0, y: 0 };
+  if (item.type === 'image') {
+    if (!item.file || !(await exists(item.file))) throw new Error('Image not found.');
+    // own copy: removing the picture from the moodboard must not break the overlay
+    await fsp.mkdir(overlayDir(key), { recursive: true });
+    pin.file = path.join(overlayDir(key), id + path.extname(item.file));
+    await fsp.copyFile(item.file, pin.file);
+    pin.h = Math.round(((item.h || 240) / (item.w || 320)) * pin.w);
+  } else if (item.type === 'note') { Object.assign(pin, { text: item.text || '', tint: item.tint || 'yellow', w: 260, h: 180 }); }
+  else if (item.type === 'color') { Object.assign(pin, { color: item.color, w: 120, h: 130 }); }
+  else throw new Error('This kind of item cannot be pinned.');
+  // new pins stack down the right edge of the screen without covering each other, then start a new column
+  const d = screen.getPrimaryDisplay().workArea;
+  const colW = 440, gap = 16;
+  for (let col = 0; col < 4; col++) {
+    const right = d.width - 30 - col * colW;
+    const inCol = o.pins.filter((p) => p.x + p.w > right - colW && p.x + p.w <= right + 1);
+    const y = inCol.reduce((m, p) => Math.max(m, p.y + p.h + gap), 70);
+    if (y + pin.h <= d.height - 20 || col === 3) { pin.x = Math.max(20, right - pin.w); pin.y = Math.min(y, Math.max(70, d.height - pin.h - 20)); break; }
+  }
+  o.pins.push(pin);
+  saveStore();
+  if (overlayWin && overlayKey === key) overlayWin.webContents.send('overlay:pins', await overlayPins(key));
+  overlayChanged(key);
+  return overlayInfo(key);
+}
+function saveOverlay(key, pins, ghost) {
+  const o = ovState(key);
+  const keep = ['id', 'type', 'file', 'text', 'tint', 'color', 'w', 'h', 'x', 'y', 'opacity'];
+  const next = (pins || []).slice(0, 40).map((p) => Object.fromEntries(Object.entries(p).filter(([k]) => keep.includes(k))));
+  const live = new Set(next.filter((p) => p.file).map((p) => p.file));
+  for (const p of o.pins) if (p.file && !live.has(p.file) && insideDir(p.file, overlayDir(key))) fsp.rm(p.file, { force: true }).catch(() => {});
+  o.pins = next;
+  if (ghost !== undefined) o.ghost = !!ghost;
+  saveStore();
+  overlayChanged(key);
+}
+// With "show with the editor" on, the overlay follows the editor of that project.
+function overlayOnLaunch(key) {
+  const o = store.overlays[key];
+  if (!o || !o.auto || !o.pins.length) return;
+  clearTimeout(overlayAutoTimer);
+  overlayAutoTimer = setTimeout(() => { if (running.has(key)) showOverlay(key); }, 9000); // the editor window takes a while to appear
+}
+function overlayOnExit(key) {
+  if (overlayKey === key && store.overlays[key] && store.overlays[key].auto) hideOverlay();
+}
+
+function registerHotkey(wanted, fallback, fn) {
+  if (!wanted) return '';
+  for (const acc of [wanted, fallback]) {
+    try { if (globalShortcut.register(acc, fn)) return acc; } catch {}
+  }
+  return '';
+}
+function registerOverlayHotkey() {
+  if (overlayHotkeyActive) { try { globalShortcut.unregister(overlayHotkeyActive); } catch {} }
+  overlayHotkeyActive = registerHotkey(store.settings.overlayHotkey, 'CommandOrControl+Alt+O', () => toggleOverlay());
+  updateTray();
+  return overlayHotkeyActive;
 }
 
 /* ------------------------------------------------------------------ Splash */
@@ -1769,7 +2073,7 @@ function createWindow(focus = false) {
   // Closing to the tray destroys the window instead of hiding it: the renderer's memory is given back
   // and the window is rebuilt in a moment when it is opened again from the tray or the taskbar.
   win.on('close', () => { if (!win.isMaximized() && !win.isMinimized()) winBounds = win.getBounds(); });
-  win.on('closed', () => { win = null; });
+  win.on('closed', () => { win = null; if (quitting || !(store.settings.closeToTray && tray)) { hideOverlay(); if (ideaWin && !ideaWin.isDestroyed()) ideaWin.destroy(); } });
   win.on('maximize', () => send('window:state', { maximized: true }));
   win.on('unmaximize', () => send('window:state', { maximized: false }));
   win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
@@ -1802,9 +2106,12 @@ app.whenReady().then(() => {
   handleArgv(process.argv);
   setTimeout(() => { repairShortcuts().catch(() => {}); pruneThumbs(); }, 8000);
   scheduleUpdateChecks();
+  registerIdeaHotkey();
+  registerOverlayHotkey();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 app.on('before-quit', () => { quitting = true; saveStore(true); });
+app.on('will-quit', () => { try { globalShortcut.unregisterAll(); } catch {} });
 app.on('window-all-closed', () => {
   if (!quitting && store.settings.closeToTray && tray) return; // keep living in the tray
   for (const t of tasks.values()) if (t.status === 'running') t.kill();

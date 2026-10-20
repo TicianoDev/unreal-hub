@@ -16,7 +16,7 @@ Find all your projects in seconds, open them with one click, keep your engines t
 
 [![Download](https://img.shields.io/badge/⬇_Download-Windows_Setup-2f62d6?style=for-the-badge)](https://github.com/TicianoDev/unreal-hub/releases/latest)
 &nbsp;
-[![Version](https://img.shields.io/badge/version-2.3.0-6a4fd6?style=for-the-badge)](https://github.com/TicianoDev/unreal-hub/releases)
+[![Version](https://img.shields.io/badge/version-2.4.0-6a4fd6?style=for-the-badge)](https://github.com/TicianoDev/unreal-hub/releases)
 &nbsp;
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e?style=for-the-badge)](LICENSE)
 
@@ -72,6 +72,8 @@ Find all your projects in seconds, open them with one click, keep your engines t
 - **Free on Fab**: the limited-time free assets with a countdown, one click to claim
 - **Fab library**: browse the Fab / Vault assets already downloaded on your PC (plugins, content packs, projects) with thumbnails, compatible UE versions and a link to each one on Fab
 - Animated loading screen; a second launch just brings the open window to the front
+- **Ideas from anywhere**: <kbd>Win</kbd> + <kbd>Alt</kbd> + <kbd>U</kbd> captures your screen and a note for the current project, even inside the editor
+- **Moodboard** per project (images, notes, colors, links) and a **reference overlay** that floats your pinned references over the Unreal editor (<kbd>Win</kbd> + <kbd>Alt</kbd> + <kbd>O</kbd>)
 - Light / dark / system theme and 7 accent colors
 - **English** (default) and **Español**
 - Command palette <kbd>Ctrl</kbd> + <kbd>K</kbd>, drag & drop, keyboard shortcuts
@@ -133,7 +135,7 @@ Find all your projects in seconds, open them with one click, keep your engines t
 
 ## 📦 Install
 
-1. Download **`UnrealHub-Setup-2.3.0.msi`** from [**Releases**](https://github.com/TicianoDev/unreal-hub/releases/latest).
+1. Download **`UnrealHub-Setup-2.4.0.msi`** from [**Releases**](https://github.com/TicianoDev/unreal-hub/releases/latest).
 2. Run it — it installs for your user only (no admin rights) and creates desktop and Start menu shortcuts.
 3. Done — Unreal Hub scans your drives and shows all your projects.
 

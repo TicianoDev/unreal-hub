@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
+<title>Unreal Hub</title>
+<style>
+  :root {
+    --bg: rgba(244, 247, 250, .97); --border: rgba(255, 255, 255, .95); --text: #1c2433; --muted: #6c7787; --field: #ffffff;
+    --line: rgba(29, 40, 58, .12); --chip: #dbe3ea; --ink: #1b1f3b; --ink-t: #ffffff; --shadow: 0 24px 70px rgba(20, 30, 50, .32); --bad: #d64545;
+  }
+  html.dark {
+    --bg: rgba(22, 27, 37, .97); --border: rgba(255, 255, 255, .08); --text: #e8ecf3; --muted: #8b95a7; --field: #1b212d;
+    --line: rgba(255, 255, 255, .1); --chip: #2a3242; --ink: #e9edf6; --ink-t: #11151d; --shadow: 0 30px 80px rgba(0, 0, 0, .65);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: transparent; overflow: hidden; }
+  body { display: grid; place-items: center; font: 14px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; color: var(--text); }
+  .card { width: 490px; border-radius: 24px; background: var(--bg); border: 1px solid var(--border); box-shadow: var(--shadow); padding: 18px 20px 18px; animation: in .28s cubic-bezier(.2, .8, .2, 1) both; }
+  html.out .card { animation: out .18s ease forwards; }
+  .head { display: flex; align-items: center; gap: 10px; -webkit-app-region: drag; user-select: none; margin-bottom: 14px; }
+  .dot { width: 30px; height: 30px; border-radius: 10px; background: var(--ink); color: var(--ink-t); display: grid; place-items: center; font: 16px "Segoe Fluent Icons", "Segoe MDL2 Assets"; }
+  .head b { font-size: 16px; font-weight: 650; flex: 1; }
+  kbd { font: 600 11px/1 "Segoe UI", sans-serif; padding: 4px 6px; border-radius: 6px; background: var(--chip); color: var(--muted); }
+  .shot { position: relative; border-radius: 14px; overflow: hidden; background: var(--chip); aspect-ratio: 16/9; }
+  .shot img { width: 100%; height: 100%; object-fit: cover; display: block; transition: opacity .2s, filter .2s; }
+  .shot.off img { opacity: .25; filter: grayscale(1); }
+  .shot .none { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 13px; }
+  .row { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+  label.check { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: var(--muted); user-select: none; }
+  label.check input { accent-color: var(--ink); width: 15px; height: 15px; }
+  select, textarea { font: inherit; color: var(--text); background: var(--field); border: 1px solid var(--line); border-radius: 11px; outline: 0; width: 100%; }
+  select { height: 38px; padding: 0 10px; }
+  textarea { height: 130px; padding: 11px 13px; resize: none; line-height: 1.5; }
+  select:focus, textarea:focus { border-color: color-mix(in srgb, var(--ink) 50%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 14%, transparent); }
+  .foot { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+  .grow { flex: 1; }
+  button { font: 500 13.5px "Segoe UI", sans-serif; height: 36px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--field); color: var(--text); cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
+  button.pri { background: var(--ink); color: var(--ink-t); border-color: transparent; }
+  button:disabled { opacity: .5; pointer-events: none; }
+  .err { color: var(--bad); font-size: 12.5px; min-height: 17px; margin-top: 6px; }
+  .label { font-size: 12px; color: var(--muted); margin: 12px 0 6px; font-weight: 500; }
+  @keyframes in { from { opacity: 0; transform: translateY(10px) scale(.97); } }
+  @keyframes out { to { opacity: 0; transform: scale(.97); } }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="head"><span class="dot">&#xEA80;</span><b id="title"></b><kbd id="hk"></kbd></div>
+    <div class="shot" id="shot"><img id="img" alt="" /><div class="none" id="none" hidden></div></div>
+    <div class="row"><label class="check"><input type="checkbox" id="useShot" checked /> <span id="lShot"></span></label></div>
+    <div class="label" id="lProject"></div>
+    <select id="project"></select>
+    <div class="label" id="lText"></div>
+    <textarea id="text" spellcheck="true"></textarea>
+    <div class="err" id="err"></div>
+    <div class="foot">
+      <label class="check"><input type="checkbox" id="toBoard" /> <span id="lBoard"></span></label>
+      <span class="grow"></span>
+      <button id="cancel"></button>
+      <button class="pri" id="save"></button>
+    </div>
+  </div>
+<script>
+  const q = new URLSearchParams(location.search);
+  const $ = (id) => document.getElementById(id);
+  if (q.get('dark') === '1') document.documentElement.classList.add('dark');
+  if (q.get('ink')) document.documentElement.style.setProperty('--ink', q.get('ink'));
+  const ES = q.get('lang') === 'es';
+  const T = ES
+    ? { title: 'Nueva idea', shot: 'Incluir la captura de pantalla', project: 'Proyecto', text: '¿Qué se te ha ocurrido?', ph: 'Escribe la idea… (Ctrl+Enter para guardar)', board: 'Añadir también al moodboard', cancel: 'Cancelar', save: 'Guardar idea', noShot: 'No se pudo capturar la pantalla', noProj: 'Primero añade un proyecto en Unreal Hub.', empty: 'Escribe algo o incluye la captura.' }
+    : { title: 'New idea', shot: 'Include the screenshot', project: 'Project', text: 'What did you think of?', ph: 'Write the idea… (Ctrl+Enter to save)', board: 'Also add it to the moodboard', cancel: 'Cancel', save: 'Save idea', noShot: 'The screen could not be captured', noProj: 'Add a project in Unreal Hub first.', empty: 'Write something or include the screenshot.' };
+  $('title').textContent = T.title; $('lShot').textContent = T.shot; $('lProject').textContent = T.project; $('lText').textContent = T.text;
+  $('text').placeholder = T.ph; $('lBoard').textContent = T.board; $('cancel').textContent = T.cancel + '  (Esc)'; $('save').textContent = T.save;
+  $('hk').textContent = (q.get('key') || '').replace('Super', 'Win').replace('CommandOrControl', 'Ctrl').replace(/\+/g, ' + ');
+  if (!q.get('key')) $('hk').hidden = true;
+  $('useShot').onchange = () => $('shot').classList.toggle('off', !$('useShot').checked);
+
+  const close = () => { document.documentElement.classList.add('out'); setTimeout(() => api.ideaClose(), 160); };
+  const save = async () => {
+    $('err').textContent = '';
+    if (!$('project').value) return ($('err').textContent = T.noProj);
+    if (!$('text').value.trim() && !($('useShot').checked && $('img').src)) return ($('err').textContent = T.empty);
+    $('save').disabled = true;
+    const r = await api.ideaSave({ key: $('project').value, text: $('text').value, includeShot: $('useShot').checked, toBoard: $('toBoard').checked });
+    if (!r.ok) { $('save').disabled = false; $('err').textContent = r.error; }
+  };
+  $('cancel').onclick = close;
+  $('save').onclick = save;
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') close();
+    else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); save(); }
+  });
+
+  api.ideaInit().then((r) => {
+    const d = r.ok ? r.data : { projects: [], selected: '', shot: '' };
+    if (d.shot) $('img').src = d.shot;
+    else { $('img').hidden = true; $('none').hidden = false; $('none').textContent = T.noShot; $('useShot').checked = false; $('useShot').disabled = true; }
+    $('project').innerHTML = d.projects.map((p) => `<option value="${p.key.replace(/"/g, '&quot;')}">${p.name.replace(/</g, '&lt;')}${p.running ? ' ●' : ''}</option>`).join('');
+    if (d.selected) $('project').value = d.selected;
+    if (!d.projects.length) $('err').textContent = T.noProj;
+    $('text').focus();
+  });
+</script>
+</body>
+</html>

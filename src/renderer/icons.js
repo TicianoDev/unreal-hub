@@ -12,7 +12,7 @@ const ICONS = {
   sort: 'E8CB', history: 'E81C', zap: 'E945', dots: 'E712', dotsH: 'E712', grip: 'E784', external: 'E8A7',
   bell: 'EA8F', database: 'EDA2', palette: 'E790', scan: 'E9A6', users: 'E77B', log: 'E9F9', duplicate: 'E8C8',
   edit: 'E70F', minimize: 'E921', maximize: 'E922', restore: 'E923', close: 'E8BB', newProject: 'ECC8',
-  gift: 'E719', help: 'E9CE', cart: 'E7BF'
+  gift: 'E719', idea: 'EA80', help: 'E9CE', cart: 'E7BF'
 };
 // Real program icons, filled in at startup from the main process (data URLs).
 const APP_ICONS = { explorer: '', terminal: '', ide: '', ueEngine: null };
